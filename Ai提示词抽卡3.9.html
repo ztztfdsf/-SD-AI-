@@ -1,0 +1,2223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SD 抽卡 - AI 提示词生成器</title>
+    
+    <!--浏览器图标-->
+    <link rel="icon" href="https://cdn.discordapp.com/attachments/1421289706704076850/1456815346362355907/1_202597020884386_00002_.png?ex=6959bc84&is=69586b04&hm=a46edfcfb59eb188609d4dd8862b2d2342eced291dafe68a7ee82f4dd967d81b&" type="image/png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "react": "https://esm.sh/react@18.2.0",
+                "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+                "lucide-react": "https://esm.sh/lucide-react@0.263.1"
+            }
+        }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        @keyframes gradient-x { 0%,100%{background-position:0% 50%} 50%{background-position:100% 50%} }
+        .animate-gradient-x { background-size:200% 200%; animation:gradient-x 3s ease infinite; }
+        .custom-scrollbar::-webkit-scrollbar { width:6px;height:6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background:rgba(30,41,59,0.5);border-radius:3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background:rgba(100,116,139,0.5);border-radius:3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background:rgba(100,116,139,0.8); }
+        * { scrollbar-width:thin; scrollbar-color:rgba(100,116,139,0.5) rgba(30,41,59,0.5); }
+        body { background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%); min-height: 100vh; }
+        input[type="text"]:focus, textarea:focus, select:focus { outline: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { 
+            Sparkles, Copy, Lock, Unlock, RefreshCw, Trash2, Plus, X, 
+            ChevronRight, ChevronDown, ChevronLeft, Settings2, Loader2, 
+            AlertTriangle, CheckCircle2, XCircle, Info, Menu, Maximize2, 
+            GripVertical, Minus, Square, CheckSquare, Palette, User, Shirt, 
+            Mountain, Clapperboard, Box, Star, PenLine, Plug, PlugZap, KeyRound, 
+            Globe, Server, Cpu, TestTube, History, Database, Download, Upload,
+            FolderUp, FolderDown, RotateCcw, Zap, Play, Scale, Eraser, Shield, 
+            ShieldOff, ClipboardPaste, BrainCircuit, List, Folder, Edit3, Save, 
+            Wrench
+        } from 'lucide-react';
+
+        // ================== 常量配置 ==================
+        const SLOT_CONFIG = [
+            { id: 'quality', label: '质量词', icon: Star },
+            { id: 'artist', label: '艺术家', icon: Palette },
+            { id: 'character', label: '角色', icon: User },
+            { id: 'appearance', label: '外貌', icon: User },
+            { id: 'clothing', label: '服装', icon: Shirt },
+            { id: 'action', label: '动作', icon: Clapperboard },
+            { id: 'items', label: '物品', icon: Box },
+            { id: 'scene', label: '场景', icon: Mountain },
+            { id: 'composition', label: '构图', icon: Clapperboard },
+        ];
+
+        const INITIAL_QUALITY_TAGS = [
+            { id: 'q1', en: 'masterpiece', zh: '杰作' },
+            { id: 'q2', en: 'best quality', zh: '最佳质量' },
+            { id: 'q3', en: 'extremely detailed', zh: '极度精细' },
+            { id: 'q4', en: 'highres', zh: '高分辨率' },
+        ];
+
+        const API_PROVIDERS = {
+            siliconflow: { id: 'siliconflow', name: '硅基流动', defaultBaseUrl: 'https://api.siliconflow.cn/v1', defaultModel: 'Qwen/Qwen2.5-7B-Instruct' },
+            deepseek: { id: 'deepseek', name: 'DeepSeek', defaultBaseUrl: 'https://api.deepseek.com/v1', defaultModel: 'deepseek-chat' },
+            openai: { id: 'openai', name: 'OpenAI 兼容', defaultBaseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o-mini' },
+        };
+
+        const DEFAULT_PROMPT_PARTS = {
+            top: '',
+            main: `You are a Stable Diffusion prompt generator specialized in anime/manga style illustrations.
+
+## 🧠 Thinking Process (MUST follow before generating)
+Before output, analyze step by step:
+1. **Theme Analysis**: What is the user requesting? (original/fanart/specific character)
+2. **Character Recognition**: 
+   - If mentions anime/game/manga titles → This is FANART, use official character names & traits
+   - If mentions "二次元角色同人" or character names → Search your knowledge for that character's canonical appearance
+   - Examples: "原神刻晴" = Keqing from Genshin Impact, "蕾姆" = Rem from Re:Zero
+3. **Style Decision**: Match the art style to the source material when applicable
+4. **Tag Planning**: Plan tags for each category based on analysis
+
+## Output Format
+Wrap your output with <提示词> tags. Organize tags by category:
+
+<提示词>
+[quality]
+tag | 中文翻译
+
+[artist]
+tag | 中文翻译
+
+[character]
+tag | 中文翻译
+
+[appearance]
+tag | 中文翻译
+
+[clothing]
+tag | 中文翻译
+
+[action]
+tag | 中文翻译
+
+[items]
+tag | 中文翻译
+
+[scene]
+tag | 中文翻译
+
+[composition]
+tag | 中文翻译
+</提示词>
+
+## 📝 Category Guidelines
+- **[action]**: Include BOTH body poses AND eye/gaze directions:
+  - Body: sitting, standing, walking, jumping, lying, etc.
+  - 👁️ Eyes: looking_at_viewer, looking_away, looking_up, looking_down, looking_back, closed_eyes, half-closed_eyes, winking, eye_contact
+
+## ⚠️ Format Rules (CRITICAL)
+1. **STRICT ORDER**: english_tag | 中文翻译 (English FIRST, Chinese SECOND)
+   - ✅ Correct: masterpiece | 杰作
+   - ✅ Correct: long_hair | 长发
+   - ❌ Wrong: 杰作 | masterpiece
+   - ❌ Wrong: 长发 | long_hair
+2. Use lowercase, underscores for spaces in English tags
+3. For FANART: MUST include character's official name tag (e.g., keqing_(genshin_impact), rem_(re:zero))
+4. For FANART: Use character's canonical hair color, eye color, outfit from source material
+5. Be creative and descriptive
+6. Include 3-8 tags per category
+7. Focus on visual elements only`,
+            extra: '',
+            bottom: ''
+        };
+
+
+        const DEFAULT_OC_COLLECTION = { id: 'default', name: '默认文件集', characters: [] };
+        const generateId = () => Math.random().toString(36).substr(2, 9);
+
+        // ================== 主组件 ==================
+        function StableDiffusionGacha() {
+            const [isMobile, setIsMobile] = useState(false);
+            useEffect(() => {
+                const checkMobile = () => setIsMobile(window.innerWidth < 768);
+                checkMobile();
+                window.addEventListener('resize', checkMobile);
+                return () => window.removeEventListener('resize', checkMobile);
+            }, []);
+
+            // 核心状态
+            const [slots, setSlots] = useState({});
+            const [isRolling, setIsRolling] = useState(false);
+            const [loadingText, setLoadingText] = useState("AI 创作中...");
+            const [expandedSlotId, setExpandedSlotId] = useState(null);
+            
+            const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
+                const saved = localStorage.getItem('sd_sidebar_open');
+                return saved !== null ? saved === 'true' : true;
+            });
+            const [activeSidebarTab, setActiveSidebarTab] = useState(() => {
+                return localStorage.getItem('sd_active_tab') || 'generate';
+            });
+            const [themeInput, setThemeInput] = useState(() => {
+                return localStorage.getItem('sd_theme_input') || '';
+            });
+            const [generationMode, setGenerationMode] = useState(() => {
+                return localStorage.getItem('sd_generation_mode') || 'detailed';
+            });
+            const [keepMemory, setKeepMemory] = useState(() => {
+                return localStorage.getItem('sd_keep_memory') === 'true';
+            });
+            const [ocPanelOpen, setOcPanelOpen] = useState(() => {
+                return localStorage.getItem('sd_oc_panel_open') === 'true';
+            });
+
+            // API 配置
+            const [apiProvider, setApiProvider] = useState('deepseek');
+            const [apiKeys, setApiKeys] = useState({});
+            const [currentBaseUrl, setCurrentBaseUrl] = useState(API_PROVIDERS.deepseek.defaultBaseUrl);
+            const [currentModel, setCurrentModel] = useState(API_PROVIDERS.deepseek.defaultModel);
+            const [apiConnected, setApiConnected] = useState(false);
+            const [isTestingConnection, setIsTestingConnection] = useState(false);
+            const [apiError, setApiError] = useState(null);
+            const [availableModels, setAvailableModels] = useState([]);
+            const [isLoadingModels, setIsLoadingModels] = useState(false);
+
+            // 生成配置（删掉了重复的 themeInput, generationMode, keepMemory）
+            const [generatedRawText, setGeneratedRawText] = useState('');
+            const [conversationHistory, setConversationHistory] = useState([]);
+
+            // 提示词模板
+            const [promptParts, setPromptParts] = useState({ ...DEFAULT_PROMPT_PARTS });
+            const [showPromptSettings, setShowPromptSettings] = useState(false);
+            const [promptPresets, setPromptPresets] = useState([]);
+            const [currentPresetId, setCurrentPresetId] = useState(null);
+            const [showPresetNameInput, setShowPresetNameInput] = useState(false);
+            const [newPresetName, setNewPresetName] = useState('');
+            const [editingPromptPart, setEditingPromptPart] = useState(null);
+
+            // OC 系统
+            const [ocCollections, setOcCollections] = useState(() => {
+                const saved = localStorage.getItem('sd_oc_collections');
+                if (saved) {
+                    try { return JSON.parse(saved); } catch(e) {}
+                }
+                return [{ ...DEFAULT_OC_COLLECTION, id: generateId() }];
+            });
+            const [currentCollectionId, setCurrentCollectionId] = useState(() => {
+                return localStorage.getItem('sd_current_collection_id') || null;
+            });
+            const [ocEnabled, setOcEnabled] = useState(() => {
+                return localStorage.getItem('sd_oc_enabled') === 'true';
+            });
+            const [showOcEditor, setShowOcEditor] = useState(false);
+            const [editingOc, setEditingOc] = useState(null);
+            const [showCollectionDropdown, setShowCollectionDropdown] = useState(false);
+            const [editingCollectionName, setEditingCollectionName] = useState(null);
+            const [newCollectionName, setNewCollectionName] = useState('');
+            const [hoveredOcId, setHoveredOcId] = useState(null);
+
+            // 历史记录
+            const [history, setHistory] = useState([]);
+            const [historyIndex, setHistoryIndex] = useState(-1);
+            const isHistoryAction = useRef(false);
+            const actionSource = useRef('manual');
+
+            // UI 状态
+            const [toasts, setToasts] = useState([]);
+            const [confirmModal, setConfirmModal] = useState({ show: false, title: "", message: "", onConfirm: null });
+            const [selectedTagIds, setSelectedTagIds] = useState(new Set());
+            const [editingTagId, setEditingTagId] = useState(null);
+            const [hoveredTagId, setHoveredTagId] = useState(null);
+            const [dragData, setDragData] = useState(null);
+            const [dropTarget, setDropTarget] = useState(null);
+            const [showCopyFeedback, setShowCopyFeedback] = useState(false);
+            const [slotCopyFeedback, setSlotCopyFeedback] = useState(null);
+            const [smartPasteContent, setSmartPasteContent] = useState('');
+            const [isSmartParsing, setIsSmartParsing] = useState(false);
+
+            // 导入导出
+            const [exportOptions, setExportOptions] = useState({
+                apiConfig: true, apiKeys: false, ocData: true, 
+                promptParts: true, promptPresets: true, currentSlots: true
+            });
+
+            // Refs
+            const editInputRef = useRef(null);
+            const slotInputRefs = useRef({});
+            const scrollRefs = useRef({});
+            const isScrolling = useRef({});
+            const scrollTimeouts = useRef({});
+            const fileInputRef = useRef(null);
+            const ocFileInputRef = useRef(null);
+
+            // 派生状态
+            const currentCollection = useMemo(() => 
+                ocCollections.find(c => c.id === currentCollectionId) || ocCollections[0],
+                [ocCollections, currentCollectionId]
+            );
+            const currentCharacters = useMemo(() => currentCollection?.characters || [], [currentCollection]);
+
+
+            // ================== 初始化 ==================
+            useEffect(() => {
+                const savedSlots = localStorage.getItem('sd_gacha_slots');
+                if (savedSlots) {
+                    try { setSlots(JSON.parse(savedSlots)); } catch(e) { initSlots(); }
+                } else { initSlots(); }
+
+                function initSlots() {
+                    const initialSlots = {};
+                    SLOT_CONFIG.forEach(config => {
+                        initialSlots[config.id] = { 
+                            tags: config.id === 'quality' ? [...INITIAL_QUALITY_TAGS] : [], 
+                            locked: config.id === 'quality', 
+                            included: true 
+                        };
+                    });
+                    setSlots(initialSlots);
+                }
+
+                const savedProvider = localStorage.getItem('sd_api_provider');
+                if (savedProvider && API_PROVIDERS[savedProvider]) {
+                    setApiProvider(savedProvider);
+                    setCurrentBaseUrl(localStorage.getItem(`sd_api_base_${savedProvider}`) || API_PROVIDERS[savedProvider].defaultBaseUrl);
+                    setCurrentModel(localStorage.getItem(`sd_api_model_${savedProvider}`) || API_PROVIDERS[savedProvider].defaultModel);
+                }
+
+                const savedApiKeys = localStorage.getItem('sd_api_keys');
+                if (savedApiKeys) try { setApiKeys(JSON.parse(savedApiKeys)); } catch(e) {}
+
+                const savedPromptParts = localStorage.getItem('sd_prompt_parts');
+                if (savedPromptParts) try { setPromptParts(JSON.parse(savedPromptParts)); } catch(e) {}
+
+                const savedPresets = localStorage.getItem('sd_prompt_presets');
+                if (savedPresets) try { setPromptPresets(JSON.parse(savedPresets)); } catch(e) {}
+                
+                const savedCurrentPreset = localStorage.getItem('sd_current_preset_id');
+                if (savedCurrentPreset) setCurrentPresetId(savedCurrentPreset);
+
+                const savedHistory = localStorage.getItem('sd_history_log');
+                if (savedHistory) try { 
+                    const h = JSON.parse(savedHistory); 
+                    setHistory(h); 
+                    setHistoryIndex(h.length - 1); 
+                } catch(e) {}
+            }, []);
+
+            // 持久化
+            useEffect(() => { if (Object.keys(slots).length > 0) localStorage.setItem('sd_gacha_slots', JSON.stringify(slots)); }, [slots]);
+            useEffect(() => { localStorage.setItem('sd_api_provider', apiProvider); }, [apiProvider]);
+            useEffect(() => { localStorage.setItem('sd_api_keys', JSON.stringify(apiKeys)); }, [apiKeys]);
+            useEffect(() => { localStorage.setItem('sd_oc_collections', JSON.stringify(ocCollections)); }, [ocCollections]);
+            useEffect(() => { if (currentCollectionId) localStorage.setItem('sd_current_collection_id', currentCollectionId); }, [currentCollectionId]);
+            useEffect(() => { localStorage.setItem('sd_oc_enabled', ocEnabled.toString()); }, [ocEnabled]);
+            useEffect(() => { localStorage.setItem('sd_prompt_parts', JSON.stringify(promptParts)); }, [promptParts]);
+            useEffect(() => { localStorage.setItem('sd_prompt_presets', JSON.stringify(promptPresets)); }, [promptPresets]);
+            useEffect(() => { if (currentPresetId) localStorage.setItem('sd_current_preset_id', currentPresetId); }, [currentPresetId]);
+            useEffect(() => { localStorage.setItem('sd_sidebar_open', isSidebarOpen.toString()); }, [isSidebarOpen]);
+            useEffect(() => { localStorage.setItem('sd_active_tab', activeSidebarTab); }, [activeSidebarTab]);
+            useEffect(() => { localStorage.setItem('sd_theme_input', themeInput); }, [themeInput]);
+            useEffect(() => { localStorage.setItem('sd_generation_mode', generationMode); }, [generationMode]);
+            useEffect(() => { localStorage.setItem('sd_keep_memory', keepMemory.toString()); }, [keepMemory]);
+            useEffect(() => { localStorage.setItem('sd_oc_panel_open', ocPanelOpen.toString()); }, [ocPanelOpen]);
+
+            useEffect(() => {
+                if (!currentCollectionId && ocCollections.length > 0) {
+                    setCurrentCollectionId(ocCollections[0].id);
+                }
+            }, [ocCollections, currentCollectionId]);
+
+            // Toast
+            const showToast = useCallback((message, type = "info") => {
+                const id = Date.now();
+                setToasts(prev => [...prev, { id, message, type }]);
+                setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
+            }, []);
+
+            // ================== API 调用 ==================
+            const callLLM = async (messages) => {
+                const response = await fetch(`${currentBaseUrl}/chat/completions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKeys[apiProvider]}` },
+                    body: JSON.stringify({ model: currentModel, messages, temperature: 0.85, max_tokens: 4096 })
+                });
+                if (!response.ok) { 
+                    const err = await response.json().catch(() => ({})); 
+                    throw new Error(err.error?.message || `API 错误: ${response.status}`); 
+                }
+                const data = await response.json();
+                return data.choices[0].message.content;
+            };
+
+            const testApiConnection = async () => {
+                if (!apiKeys[apiProvider]) { showToast("请先输入 API Key", "warning"); return; }
+                setIsTestingConnection(true); setApiError(null);
+                try {
+                    await callLLM([{ role: "user", content: "Hi" }]);
+                    setApiConnected(true);
+                    showToast("API 连接成功！", "success");
+                } catch (e) { 
+                    setApiError(e.message); 
+                    setApiConnected(false); 
+                    showToast("连接失败: " + e.message, "error"); 
+                } finally { 
+                    setIsTestingConnection(false); 
+                }
+            };
+
+            const fetchModelList = async () => {
+                if (!apiKeys[apiProvider]) { showToast("请先输入 API Key", "warning"); return; }
+                setIsLoadingModels(true);
+                try {
+                    const response = await fetch(`${currentBaseUrl}/models`, {
+                        headers: { 'Authorization': `Bearer ${apiKeys[apiProvider]}` }
+                    });
+                    if (!response.ok) throw new Error('获取模型列表失败');
+                    const data = await response.json();
+                    const models = data.data?.map(m => m.id) || [];
+                    setAvailableModels(models);
+                    if (models.length > 0) showToast(`获取到 ${models.length} 个模型`, "success");
+                } catch (e) { showToast("获取模型列表失败", "error"); }
+                finally { setIsLoadingModels(false); }
+            };
+
+            const handleProviderChange = (providerId) => {
+                setApiProvider(providerId);
+                const savedUrl = localStorage.getItem(`sd_api_base_${providerId}`);
+                const savedModel = localStorage.getItem(`sd_api_model_${providerId}`);
+                setCurrentBaseUrl(savedUrl || API_PROVIDERS[providerId].defaultBaseUrl);
+                setCurrentModel(savedModel || API_PROVIDERS[providerId].defaultModel);
+                setApiConnected(false);
+                setAvailableModels([]);
+            };
+
+            const handleApiKeyChange = (key) => {
+                setApiKeys(prev => ({ ...prev, [apiProvider]: key }));
+                setApiConnected(false);
+            };
+
+            const handleBaseUrlChange = (url) => {
+                setCurrentBaseUrl(url);
+                localStorage.setItem(`sd_api_base_${apiProvider}`, url);
+                setApiConnected(false);
+            };
+
+            const handleModelChange = (model) => {
+                setCurrentModel(model);
+                localStorage.setItem(`sd_api_model_${apiProvider}`, model);
+            };
+
+            // ================== 解析函数 ==================
+            const parseGeneratedPrompt = (text) => {
+                const result = {};
+                SLOT_CONFIG.forEach(c => result[c.id] = []);
+
+                let cleanedText = text
+                    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+                    .replace(/<Think>[\s\S]*?<\/Think>/gi, '')
+                    .replace(/[\s\S]*?<\/think>/gi, '');
+
+                const promptMatch = cleanedText.match(/<提示词>([\s\S]*?)<\/提示词>/);
+                const contentToParse = promptMatch ? promptMatch[1] : cleanedText;
+
+                const categoryMap = {
+                    'quality': ['quality', '质量', '画质'],
+                    'artist': ['artist', '艺术家', '画师'],
+                    'character': ['character', '角色', '人物'],
+                    'appearance': ['appearance', '外貌', '外观', '容貌'],
+                    'clothing': ['clothing', '服装', '衣服', '服饰'],
+                    'action': ['action', '动作', '姿势', '行为'],
+                    'items': ['items', 'item', '物品', '道具'],
+                    'scene': ['scene', '场景', '背景', '环境'],
+                    'composition': ['composition', '构图', '视角']
+                };
+
+                let currentCategory = null;
+                const lines = contentToParse.split('\n');
+
+                for (const line of lines) {
+                    const trimmedLine = line.trim();
+                    if (!trimmedLine) continue;
+
+                    const categoryMatch = trimmedLine.match(/^\[([^\]]+)\]/) ||
+                                         trimmedLine.match(/^【([^】]+)】/) || 
+                                         trimmedLine.match(/^##?\s*\[?([^\]\s]+)\]?/)
+                    if (categoryMatch) {
+                        const catName = categoryMatch[1].toLowerCase();
+                        for (const [key, aliases] of Object.entries(categoryMap)) {
+                            if (aliases.some(a => catName.includes(a.toLowerCase()))) {
+                                currentCategory = key;
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+
+                    if (currentCategory && result[currentCategory]) {
+                        const parts = trimmedLine.split(/\s*[|｜\/]\s*/);
+                        if (parts.length >= 1) {
+                            const en = parts[0].trim().replace(/^[-*•]\s*/, '');
+                            const zh = parts[1]?.trim() || '?';
+                            if (en && !en.match(/^\[/) && !en.match(/^#/)) {
+                                result[currentCategory].push({ id: generateId(), en, zh });
+                            }
+                        }
+                    }
+                }
+                return result;
+            };
+
+            // ================== 提示词预设 ==================
+            const saveAsNewPreset = () => {
+                const name = newPresetName.trim() || `预设 ${promptPresets.length + 1}`;
+                const newPreset = { id: generateId(), name, createdAt: new Date().toISOString(), parts: { ...promptParts } };
+                setPromptPresets(prev => [...prev, newPreset]);
+                setCurrentPresetId(newPreset.id);
+                setNewPresetName('');
+                setShowPresetNameInput(false);
+                showToast(`已保存预设「${name}」`, "success");
+            };
+
+            const updateCurrentPreset = () => {
+                if (!currentPresetId) { showToast("请先选择或创建预设", "warning"); return; }
+                setPromptPresets(prev => prev.map(p => 
+                    p.id === currentPresetId ? { ...p, parts: { ...promptParts }, updatedAt: new Date().toISOString() } : p
+                ));
+                showToast("预设已更新", "success");
+            };
+
+            const loadPreset = (presetId) => {
+                const preset = promptPresets.find(p => p.id === presetId);
+                if (preset) {
+                    setPromptParts({ ...preset.parts });
+                    setCurrentPresetId(presetId);
+                    showToast(`已加载预设「${preset.name}」`, "success");
+                }
+            };
+
+            const deletePreset = (presetId) => {
+                const preset = promptPresets.find(p => p.id === presetId);
+                setConfirmModal({
+                    show: true, title: "删除预设", message: `确定要删除预设「${preset?.name}」吗？`,
+                    onConfirm: () => {
+                        setPromptPresets(prev => prev.filter(p => p.id !== presetId));
+                        if (currentPresetId === presetId) setCurrentPresetId(null);
+                        setConfirmModal({ show: false, title: "", message: "", onConfirm: null });
+                        showToast("预设已删除", "success");
+                    }
+                });
+            };
+
+            // ================== OC 管理 ==================
+            const createNewCollection = () => {
+                const name = newCollectionName.trim() || `文件集 ${ocCollections.length + 1}`;
+                const newCollection = { id: generateId(), name, characters: [] };
+                setOcCollections(prev => [...prev, newCollection]);
+                setCurrentCollectionId(newCollection.id);
+                setNewCollectionName('');
+                showToast(`已创建「${name}」`, "success");
+            };
+
+            const deleteCollection = (collectionId) => {
+                if (ocCollections.length <= 1) { showToast("至少保留一个文件集", "warning"); return; }
+                const collection = ocCollections.find(c => c.id === collectionId);
+                setConfirmModal({
+                    show: true, title: "删除文件集", message: `确定要删除「${collection?.name}」及其所有角色吗？`,
+                    onConfirm: () => {
+                        setOcCollections(prev => prev.filter(c => c.id !== collectionId));
+                        if (currentCollectionId === collectionId) {
+                            setCurrentCollectionId(ocCollections.find(c => c.id !== collectionId)?.id);
+                        }
+                        setConfirmModal({ show: false, title: "", message: "", onConfirm: null });
+                        showToast("文件集已删除", "success");
+                    }
+                });
+            };
+
+            const renameCollection = (collectionId, newName) => {
+                if (!newName.trim()) return;
+                setOcCollections(prev => prev.map(c => c.id === collectionId ? { ...c, name: newName.trim() } : c));
+                setEditingCollectionName(null);
+                showToast("已重命名", "success");
+            };
+
+            const updateCurrentCollectionCharacters = (updateFn) => {
+                setOcCollections(prev => prev.map(c => 
+                    c.id === currentCollectionId ? { ...c, characters: updateFn(c.characters) } : c
+                ));
+            };
+
+            const createNewOc = () => {
+                setEditingOc({ id: generateId(), name: '新角色', enabled: true, core: '', outfits: [] });
+                setShowOcEditor(true);
+            };
+
+            const editOc = (oc) => {
+                setEditingOc({ ...oc, outfits: oc.outfits?.map(o => ({ ...o })) || [] });
+                setShowOcEditor(true);
+            };
+
+            const saveOc = () => {
+                if (!editingOc) return;
+                if (!editingOc.name.trim()) { showToast("请输入角色名称", "warning"); return; }
+                updateCurrentCollectionCharacters(characters => {
+                    const exists = characters.find(oc => oc.id === editingOc.id);
+                    return exists ? characters.map(oc => oc.id === editingOc.id ? editingOc : oc) : [...characters, editingOc];
+                });
+                setShowOcEditor(false);
+                setEditingOc(null);
+                showToast("角色已保存", "success");
+            };
+
+            const deleteOc = (ocId) => {
+                setConfirmModal({
+                    show: true, title: "删除角色", message: "确定要删除这个角色吗？",
+                    onConfirm: () => {
+                        updateCurrentCollectionCharacters(characters => characters.filter(oc => oc.id !== ocId));
+                        setConfirmModal({ show: false, title: "", message: "", onConfirm: null });
+                        showToast("角色已删除", "success");
+                    }
+                });
+            };
+
+            const toggleOcEnabled = (ocId) => {
+                updateCurrentCollectionCharacters(characters => characters.map(oc => oc.id === ocId ? { ...oc, enabled: !oc.enabled } : oc));
+            };
+
+            const addOutfit = () => {
+                if (!editingOc) return;
+                setEditingOc(prev => ({
+                    ...prev,
+                    outfits: [...(prev.outfits || []), { id: generateId(), name: '新服装', enabled: false, tags: '' }]
+                }));
+            };
+
+            const updateOutfit = (outfitId, field, value) => {
+                if (!editingOc) return;
+                setEditingOc(prev => ({
+                    ...prev,
+                    outfits: prev.outfits.map(o => o.id === outfitId ? { ...o, [field]: value } : o)
+                }));
+            };
+
+            const deleteOutfit = (outfitId) => {
+                if (!editingOc) return;
+                setEditingOc(prev => ({ ...prev, outfits: prev.outfits.filter(o => o.id !== outfitId) }));
+            };
+
+            const toggleOutfitInList = (ocId, outfitId) => {
+                updateCurrentCollectionCharacters(characters => characters.map(oc => {
+                    if (oc.id !== ocId) return oc;
+                    return { ...oc, outfits: oc.outfits.map(o => o.id === outfitId ? { ...o, enabled: !o.enabled } : o) };
+                }));
+            };
+
+            const exportCurrentCollection = () => {
+                const collection = currentCollection;
+                if (!collection) return;
+                const exportData = { version: '1.0', type: 'oc_collection', exportDate: new Date().toISOString(), collection };
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData, null, 2));
+                const a = document.createElement('a');
+                a.setAttribute("href", dataStr);
+                a.setAttribute("download", `oc_${collection.name}_${new Date().toISOString().slice(0,10)}.json`);
+                document.body.appendChild(a); a.click(); a.remove();
+                showToast(`已导出「${collection.name}」`, "success");
+            };
+
+            const handleImportCollection = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        if (data.type === 'oc_collection' && data.collection) {
+                            const newCollection = {
+                                ...data.collection,
+                                id: generateId(),
+                                name: data.collection.name + ' (导入)',
+                                characters: data.collection.characters.map(c => ({
+                                    ...c, id: generateId(),
+                                    outfits: c.outfits?.map(o => ({ ...o, id: generateId() })) || []
+                                }))
+                            };
+                            setOcCollections(prev => [...prev, newCollection]);
+                            setCurrentCollectionId(newCollection.id);
+                            showToast(`已导入「${newCollection.name}」`, "success");
+                        } else {
+                            showToast("无效的文件集格式", "error");
+                        }
+                    } catch (err) {
+                        showToast("导入失败：无法解析文件", "error");
+                    }
+                };
+                reader.readAsText(file);
+                e.target.value = null;
+            };
+
+            // ================== OC 上下文构建 ==================
+            const buildOcContext = () => {
+                if (!ocEnabled) return { context: '', hasOC: false };
+                
+                // 收集所有启用的OC本体
+                const enabledOCs = currentCharacters.filter(oc => oc.enabled);
+                
+                // 收集所有启用的服装（不管OC本身是否启用）
+                const allEnabledOutfits = [];
+                currentCharacters.forEach(oc => {
+                    const enabledOutfits = oc.outfits?.filter(o => o.enabled) || [];
+                    enabledOutfits.forEach(outfit => {
+                        allEnabledOutfits.push({ ocName: oc.name, outfit });
+                    });
+                });
+                
+                // 如果没有任何启用的内容，返回空
+                if (enabledOCs.length === 0 && allEnabledOutfits.length === 0) {
+                    return { context: '', hasOC: false };
+                }
+                
+                let context = `\n\n## 📌 OC Character Data (MUST USE!)\n`;
+                
+                // 添加启用的OC本体
+                if (enabledOCs.length > 0) {
+                    enabledOCs.forEach(oc => {
+                        context += `\n### OC: ${oc.name}\n**Core** (→ [character] + [appearance]):\n${oc.core}\n`;
+                    });
+                }
+                
+                // 添加所有启用的服装（独立于OC本体）
+                if (allEnabledOutfits.length > 0) {
+                    context += `\n### Selected Outfits (→ [clothing]):\n`;
+                    allEnabledOutfits.forEach(({ ocName, outfit }) => {
+                        context += `- [${ocName} - ${outfit.name}]: ${outfit.tags}\n`;
+                    });
+                }
+                
+                return { context, hasOC: true };
+            };
+
+            const getFullSystemPrompt = useCallback(() => {
+                const { context: ocContext, hasOC } = buildOcContext();
+                let prompt = '';
+                if (promptParts.top?.trim()) prompt += promptParts.top + '\n\n';
+                prompt += promptParts.main;
+                if (hasOC) prompt += ocContext;
+                if (promptParts.extra?.trim()) prompt += '\n\n## Additional Requirements\n' + promptParts.extra;
+                if (promptParts.bottom?.trim()) prompt += '\n\n' + promptParts.bottom;
+                return prompt;
+            }, [promptParts, ocEnabled, currentCharacters]);
+
+            const callLLMGenerateRaw = async (theme, mode) => {
+                const randomSeed = Math.random().toString(36).substring(7);
+                const modeInstruction = `Mode: ${mode === 'detailed' ? 'Rich, highly detailed (30+ tags)' : 'Concise (15-20 tags)'}.`;
+                let userPrompt = theme ? `Theme: ${theme} [Seed: ${randomSeed}]` : `Random creative anime illustration [Seed: ${randomSeed}]`;
+                const { hasOC } = buildOcContext();
+                if (hasOC) {
+                    const enabledNames = currentCharacters.filter(oc => oc.enabled).map(oc => oc.name).join(', ');
+                    userPrompt += `\n\nUsing OC: ${enabledNames}`;
+                }
+                const systemPrompt = getFullSystemPrompt() + "\n\n" + modeInstruction;
+                const messages = [{ role: "system", content: systemPrompt }];
+                if (keepMemory && conversationHistory.length > 0) messages.push(...conversationHistory);
+                messages.push({ role: "user", content: userPrompt });
+                const response = await callLLM(messages);
+                if (keepMemory) {
+                    setConversationHistory(prev => [...prev, { role: "user", content: userPrompt }, { role: "assistant", content: response }]);
+                }
+                return response;
+            };
+
+            const clearMemory = () => { 
+                setConversationHistory([]); 
+                showToast("对话记忆已清空", "success"); 
+            };
+
+            // ================== 历史记录 ==================
+            useEffect(() => {
+                if (Object.keys(slots).length === 0) return;
+                if (isHistoryAction.current) { isHistoryAction.current = false; return; }
+                setHistory(prev => {
+                    const currentSlice = prev.slice(0, historyIndex + 1);
+                    const newEntry = { slots: JSON.parse(JSON.stringify(slots)), timestamp: new Date().toLocaleTimeString(), id: Date.now(), source: actionSource.current };
+                    actionSource.current = 'manual';
+                    const newHistory = [...currentSlice, newEntry];
+                    if (newHistory.length > 50) newHistory.shift();
+                    localStorage.setItem('sd_history_log', JSON.stringify(newHistory));
+                    return newHistory;
+                });
+                setHistoryIndex(prev => prev + 1);
+            }, [slots]);
+
+            const undo = useCallback(() => {
+                if (historyIndex > 0) {
+                    isHistoryAction.current = true;
+                    setHistoryIndex(historyIndex - 1);
+                    setSlots(history[historyIndex - 1].slots);
+                }
+            }, [historyIndex, history]);
+
+            const redo = useCallback(() => {
+                if (historyIndex < history.length - 1) {
+                    isHistoryAction.current = true;
+                    setHistoryIndex(historyIndex + 1);
+                    setSlots(history[historyIndex + 1].slots);
+                }
+            }, [historyIndex, history]);
+
+            const jumpToHistory = (realIndex) => {
+                isHistoryAction.current = true;
+                setHistoryIndex(realIndex);
+                setSlots(history[realIndex].slots);
+            };
+
+            // ================== 快捷键 ==================
+            useEffect(() => {
+                const handleKeyDown = (e) => {
+                    const isInputActive = ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName);
+                    if (isInputActive && e.key === 'Escape') { e.target.blur(); return; }
+                    if (e.key === 'Escape') {
+                        if (showOcEditor) { setShowOcEditor(false); return; }
+                        if (expandedSlotId) { setExpandedSlotId(null); return; }
+                        if (confirmModal.show) { setConfirmModal({ ...confirmModal, show: false }); return; }
+                        e.preventDefault(); setIsSidebarOpen(prev => !prev); return;
+                    }
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !isInputActive) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'y' && !isInputActive) { e.preventDefault(); redo(); return; }
+                    if (isInputActive && (e.ctrlKey || e.metaKey) && ['c', 'x', 'v', 'a'].includes(e.key.toLowerCase())) return;
+                    if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'm')) { e.preventDefault(); setIsSidebarOpen(prev => !prev); }
+                    if ((e.key === 'Delete' || e.key === 'Backspace') && !isInputActive && selectedTagIds.size > 0) { e.preventDefault(); deleteSelectedTags(); }
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'c' && !isInputActive && selectedTagIds.size > 0) { e.preventDefault(); copySelectedTags(); }
+                };
+                window.addEventListener('keydown', handleKeyDown);
+                return () => window.removeEventListener('keydown', handleKeyDown);
+            }, [historyIndex, history, isSidebarOpen, selectedTagIds, slots, expandedSlotId, showOcEditor, confirmModal, undo, redo]);
+
+            useEffect(() => { if (editingTagId && editInputRef.current) editInputRef.current.focus(); }, [editingTagId]);
+
+            // ================== 批量操作 ==================
+            const batchLockAll = () => { setSlots(prev => { const n={...prev}; Object.keys(n).forEach(k=>n[k].locked=true); return n; }); showToast("已锁定所有模块", "success"); };
+            const batchUnlockAll = () => { setSlots(prev => { const n={...prev}; Object.keys(n).forEach(k=>n[k].locked=false); return n; }); showToast("已解锁所有模块", "success"); };
+            const batchIncludeAll = () => { setSlots(prev => { const n={...prev}; Object.keys(n).forEach(k=>n[k].included=true); return n; }); showToast("已勾选所有模块", "success"); };
+            const batchExcludeAll = () => { setSlots(prev => { const n={...prev}; Object.keys(n).forEach(k=>n[k].included=false); return n; }); showToast("已取消勾选所有模块", "success"); };
+            const batchClearWeights = () => {
+                setSlots(prev => {
+                    const next = { ...prev };
+                    Object.keys(next).forEach(key => {
+                        if (next[key].tags) {
+                            next[key].tags = next[key].tags.map(tag => {
+                                let text = tag.en.replace(/^\((.+):[0-9.]+\)$/, '$1').replace(/^\((.+)\)$/, '$1');
+                                return { ...tag, en: text };
+                            });
+                        }
+                    });
+                    return next;
+                });
+                showToast("已重置所有权重", "success");
+            };
+            const batchClearAllContent = () => {
+                setConfirmModal({
+                    show: true, title: "清空未锁定内容", message: "确定要清空所有未锁定卡槽的内容吗？",
+                    onConfirm: () => {
+                        setSlots(prev => { const n={...prev}; Object.keys(n).forEach(k => { if (!n[k].locked) n[k].tags = []; }); return n; });
+                        setConfirmModal({ show: false, title: "", message: "", onConfirm: null });
+                        showToast("已清空未锁定内容", "success");
+                    }
+                });
+            };
+
+            // ================== 同步滚动 ==================
+            const handleSyncScroll = (slotId, source) => {
+                const refs = scrollRefs.current[slotId];
+                if (!refs || !refs.en || !refs.zh) return;
+                const sourceEl = source === 'en' ? refs.en : refs.zh;
+                const targetEl = source === 'en' ? refs.zh : refs.en;
+                if (isScrolling.current[slotId] && isScrolling.current[slotId] !== source) return;
+                isScrolling.current[slotId] = source;
+                const maxSource = sourceEl.scrollHeight - sourceEl.clientHeight;
+                const maxTarget = targetEl.scrollHeight - targetEl.clientHeight;
+                if (maxSource > 0 && maxTarget > 0) targetEl.scrollTop = (sourceEl.scrollTop / maxSource) * maxTarget;
+                if (scrollTimeouts.current[slotId]) clearTimeout(scrollTimeouts.current[slotId]);
+                scrollTimeouts.current[slotId] = setTimeout(() => { isScrolling.current[slotId] = null; }, 50);
+            };
+
+            // ================== 提示词模板操作 ==================
+            const updatePromptPart = (part, value) => setPromptParts(prev => ({ ...prev, [part]: value }));
+            const resetPromptPart = (part) => { setPromptParts(prev => ({ ...prev, [part]: DEFAULT_PROMPT_PARTS[part] })); showToast("已重置该部分", "success"); };
+            const resetAllPromptParts = () => { setPromptParts({ ...DEFAULT_PROMPT_PARTS }); showToast("已重置全部提示词模板", "success"); };
+
+            // ================== 导入导出 ==================
+            const exportAllConfig = () => {
+                const exportData = { version: '2.0', type: 'full_backup', exportDate: new Date().toISOString(), data: {} };
+                if (exportOptions.apiConfig) {
+                    exportData.data.apiConfig = { provider: apiProvider, baseUrls: {}, models: {} };
+                    Object.keys(API_PROVIDERS).forEach(p => {
+                        const savedUrl = localStorage.getItem(`sd_api_base_${p}`);
+                        const savedModel = localStorage.getItem(`sd_api_model_${p}`);
+                        if (savedUrl) exportData.data.apiConfig.baseUrls[p] = savedUrl;
+                        if (savedModel) exportData.data.apiConfig.models[p] = savedModel;
+                    });
+                }
+                if (exportOptions.apiKeys) exportData.data.apiKeys = apiKeys;
+                if (exportOptions.ocData) {
+                    exportData.data.ocCollections = ocCollections;
+                    exportData.data.currentCollectionId = currentCollectionId;
+                    exportData.data.ocEnabled = ocEnabled;
+                }
+                if (exportOptions.promptParts) exportData.data.promptParts = promptParts;
+                if (exportOptions.promptPresets) {
+                    exportData.data.promptPresets = promptPresets;
+                    exportData.data.currentPresetId = currentPresetId;
+                }
+                if (exportOptions.currentSlots) exportData.data.slots = slots;
+
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData, null, 2));
+                const a = document.createElement('a');
+                a.setAttribute("href", dataStr);
+                a.setAttribute("download", `sd_gacha_backup_${new Date().toISOString().slice(0,10)}.json`);
+                document.body.appendChild(a); a.click(); a.remove();
+                showToast("全量备份已导出", "success");
+            };
+
+            const handleImportConfig = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        if (data.type !== 'full_backup') { showToast("无效的备份文件格式", "error"); return; }
+                        setConfirmModal({
+                            show: true, title: "确认导入", message: "导入将覆盖现有配置，确定继续吗？",
+                            onConfirm: () => {
+                                if (data.data.apiConfig) {
+                                    setApiProvider(data.data.apiConfig.provider);
+                                    localStorage.setItem('sd_api_provider', data.data.apiConfig.provider);
+                                    if (data.data.apiConfig.baseUrls) Object.entries(data.data.apiConfig.baseUrls).forEach(([p, url]) => localStorage.setItem(`sd_api_base_${p}`, url));
+                                    if (data.data.apiConfig.models) Object.entries(data.data.apiConfig.models).forEach(([p, model]) => localStorage.setItem(`sd_api_model_${p}`, model));
+                                    setCurrentBaseUrl(data.data.apiConfig.baseUrls?.[data.data.apiConfig.provider] || API_PROVIDERS[data.data.apiConfig.provider]?.defaultBaseUrl || '');
+                                    setCurrentModel(data.data.apiConfig.models?.[data.data.apiConfig.provider] || API_PROVIDERS[data.data.apiConfig.provider]?.defaultModel || '');
+                                }
+                                if (data.data.apiKeys) { setApiKeys(data.data.apiKeys); localStorage.setItem('sd_api_keys', JSON.stringify(data.data.apiKeys)); }
+                                if (data.data.ocCollections) {
+                                    setOcCollections(data.data.ocCollections);
+                                    if (data.data.currentCollectionId && data.data.ocCollections.some(c => c.id === data.data.currentCollectionId)) {
+                                        setCurrentCollectionId(data.data.currentCollectionId);
+                                    } else if (data.data.ocCollections.length > 0) {
+                                        setCurrentCollectionId(data.data.ocCollections[0].id);
+                                    }
+                                }
+                                if (data.data.ocEnabled !== undefined) setOcEnabled(data.data.ocEnabled);
+                                
+                                if (data.data.promptParts) setPromptParts(data.data.promptParts);
+                                if (data.data.promptPresets) setPromptPresets(data.data.promptPresets);
+                                if (data.data.currentPresetId) setCurrentPresetId(data.data.currentPresetId);
+                                if (data.data.slots) { actionSource.current = 'import'; setSlots(data.data.slots); }
+                                setConfirmModal({ show: false, title: "", message: "", onConfirm: null });
+                                showToast("备份已成功导入", "success");
+                            }
+                        });
+                    } catch (err) { showToast("导入失败：无法解析文件", "error"); }
+                };
+                reader.readAsText(file);
+                e.target.value = null;
+            };
+
+
+            const resetAllSettings = () => {
+                setConfirmModal({
+                    show: true, title: "重置所有设置", message: "确定要重置所有设置为默认值吗？",
+                    onConfirm: () => {
+                        localStorage.clear();
+                        setPromptParts({ ...DEFAULT_PROMPT_PARTS });
+                        setPromptPresets([]);
+                        setCurrentPresetId(null);
+                        setOcCollections([{ ...DEFAULT_OC_COLLECTION, id: generateId() }]);
+                        setCurrentCollectionId(null);
+                        setOcEnabled(false);
+                        setApiKeys({});
+                        setApiConnected(false);
+                        setApiProvider('deepseek');
+                        setCurrentBaseUrl(API_PROVIDERS.deepseek.defaultBaseUrl);
+                        setCurrentModel(API_PROVIDERS.deepseek.defaultModel);
+                        const initialSlots = {};
+                        SLOT_CONFIG.forEach(config => {
+                            initialSlots[config.id] = { tags: config.id === 'quality' ? [...INITIAL_QUALITY_TAGS] : [], locked: config.id === 'quality', included: true };
+                        });
+                        setSlots(initialSlots);
+                        setHistory([]);
+                        setHistoryIndex(-1);
+                        setConfirmModal({ show: false, title: "", message: "", onConfirm: null });
+                        showToast("已重置所有设置", "success");
+                    }
+                });
+            };
+
+            // ================== 核心生成流程 ==================
+            const handleGenerateText = async () => {
+                if (!apiKeys[apiProvider]) { setIsSidebarOpen(true); setActiveSidebarTab('settings'); showToast("请配置 API Key", "error"); return; }
+                setApiError(null); setLoadingText("正在构思..."); setIsRolling(true);
+                try {
+                    const text = await callLLMGenerateRaw(themeInput, generationMode);
+                    setGeneratedRawText(text);
+                    showToast("文本生成成功", "success");
+                } catch (e) { setApiError(e.message); showToast("生成失败: " + e.message, "error"); }
+                finally { setIsRolling(false); }
+            };
+
+            const handleParseAndFill = async (textOverride = null) => {
+                const textToProcess = textOverride || generatedRawText;
+                if (!textToProcess?.trim()) { showToast("请先生成或输入提示词文本", "warning"); return; }
+                setApiError(null); setLoadingText("正在解析..."); setIsRolling(true);
+                try {
+                    const parsedSlots = parseGeneratedPrompt(textToProcess);
+                    const totalTags = Object.values(parsedSlots).reduce((acc, arr) => acc + arr.length, 0);
+                    if (totalTags === 0) { showToast("未找到有效的分类格式，请检查内容", "warning"); setIsRolling(false); return; }
+                    let nextSlots = JSON.parse(JSON.stringify(slots));
+                    let leftoverCount = 0;
+                    Object.keys(parsedSlots).forEach(key => {
+                        if (nextSlots[key]) {
+                            if (nextSlots[key].locked) leftoverCount += parsedSlots[key].length;
+                            else if (parsedSlots[key].length > 0) nextSlots[key].tags = parsedSlots[key];
+                        }
+                    });
+                    actionSource.current = 'ai';
+                    setSlots(nextSlots);
+                    if (leftoverCount > 0) showToast(`解析完成，${leftoverCount} 个词因锁定未填入`, "info");
+                    else { setIsSidebarOpen(false); showToast("解析并填入完成！", "success"); }
+                } catch (e) { setApiError(e.message); showToast("处理失败: " + e.message, "error"); }
+                finally { setIsRolling(false); }
+            };
+
+            const handleOneClickRoll = async () => {
+                if (!apiKeys[apiProvider]) { setIsSidebarOpen(true); setActiveSidebarTab('settings'); showToast("请配置 API Key", "error"); return; }
+                setApiError(null); setLoadingText("AI 创作中..."); setIsRolling(true);
+                try {
+                    const text = await callLLMGenerateRaw(themeInput, generationMode);
+                    setGeneratedRawText(text);
+                    const parsedSlots = parseGeneratedPrompt(text);
+                    const totalTags = Object.values(parsedSlots).reduce((acc, arr) => acc + arr.length, 0);
+                    if (totalTags === 0) { showToast("AI 返回格式异常，请重试", "warning"); setIsRolling(false); return; }
+                    let nextSlots = JSON.parse(JSON.stringify(slots));
+                    Object.keys(parsedSlots).forEach(key => {
+                        if (nextSlots[key] && !nextSlots[key].locked && parsedSlots[key].length > 0) nextSlots[key].tags = parsedSlots[key];
+                    });
+                    actionSource.current = 'ai';
+                    setSlots(nextSlots);
+                    showToast("一键 AI 抽卡完成！", "success");
+                } catch (e) { setApiError(e.message); showToast("抽卡失败: " + e.message, "error"); }
+                finally { setIsRolling(false); }
+            };
+
+            const handleSmartPaste = async () => {
+                if (!apiKeys[apiProvider]) { setIsSidebarOpen(true); setActiveSidebarTab('settings'); showToast("请先配置 API Key", "error"); return; }
+                if (!smartPasteContent.trim()) { showToast("请先粘贴提示词", "warning"); return; }
+                setIsSmartParsing(true); setLoadingText("智能解析中...");
+                try {
+                    const parsePrompt = `Parse and categorize these Stable Diffusion tags, then translate to Chinese.\n\nInput tags:\n${smartPasteContent}\n\nOutput format:\n<提示词>\n[quality]\ntag | 中文翻译\n[character]\ntag | 中文翻译\n...etc\n</提示词>`;
+                    const result = await callLLM([
+                        { role: "system", content: "You categorize SD prompts into: quality, artist, character, appearance, clothing, action, items, scene, composition. Output format: [category]\\ntag | 中文" },
+                        { role: "user", content: parsePrompt }
+                    ]);
+                    const parsedSlots = parseGeneratedPrompt(result);
+                    const totalTags = Object.values(parsedSlots).reduce((acc, arr) => acc + arr.length, 0);
+                    if (totalTags === 0) { showToast("解析失败，请重试", "warning"); setIsSmartParsing(false); return; }
+                    let nextSlots = JSON.parse(JSON.stringify(slots));
+                    let leftoverTags = [];
+                    Object.keys(parsedSlots).forEach(key => {
+                        if (nextSlots[key]) {
+                            if (nextSlots[key].locked) leftoverTags.push(...parsedSlots[key].map(t => t.en));
+                            else if (parsedSlots[key].length > 0) nextSlots[key].tags = parsedSlots[key];
+                        }
+                    });
+                    setSmartPasteContent(leftoverTags.join(", "));
+                    actionSource.current = 'ai';
+                    setSlots(nextSlots);
+                    if (leftoverTags.length > 0) showToast(`解析完成！${leftoverTags.length} 个词因锁定未填入`, "info");
+                    else { setIsSidebarOpen(false); showToast("智能解析完成！", "success"); }
+                } catch (e) { showToast("解析失败: " + e.message, "error"); }
+                finally { setIsSmartParsing(false); }
+            };
+
+            // ================== Tag 操作 ==================
+            const adjustTagWeight = (slotId, tagId, delta) => {
+                setSlots(prev => {
+                    const slot = prev[slotId];
+                    const newTags = slot.tags.map(t => {
+                        if (t.id !== tagId) return t;
+                        
+                        let rawText = t.en;
+                        let weight = 1.0;
+                        
+                        // 检查是否已有权重格式 (text:1.2)
+                        const weightMatch = rawText.match(/^\((.+):([0-9.-]+)\)$/);
+                        let text;
+                        
+                        if (weightMatch) {
+                            text = weightMatch[1];
+                            weight = parseFloat(weightMatch[2]);
+                        } else {
+                            // 检查是否有简单括号 (text)
+                            const simpleMatch = rawText.match(/^\((.+)\)$/);
+                            text = simpleMatch ? simpleMatch[1] : rawText;
+                        }
+                        
+                        // 计算新权重（限制范围 -100 ~ 100）
+                        let newWeight = Math.round((weight + delta) * 10) / 10;
+                        if (newWeight < -100) newWeight = -100;
+                        if (newWeight > 100) newWeight = 100;
+                        
+                        // 生成新的文本
+                        const newEn = newWeight === 1.0 ? text : `(${text}:${newWeight.toFixed(1)})`;
+                        return { ...t, en: newEn };
+                    });
+                    return { ...prev, [slotId]: { ...slot, tags: newTags } };
+                });
+            };
+
+
+
+            const addTag = (slotId, rawText) => {
+                if (!rawText) return;
+                const newTagsRaw = rawText.split(/[,\.，。]/).map(t => t.trim()).filter(t => t.length > 0);
+                if (newTagsRaw.length === 0) return;
+                const newTags = newTagsRaw.map(text => ({ id: generateId(), en: text, zh: '?' }));
+                setSlots(prev => ({ ...prev, [slotId]: { ...prev[slotId], tags: [...prev[slotId].tags, ...newTags] } }));
+            };
+
+            const removeTag = (slotId, tagId) => {
+                setSlots(prev => ({ ...prev, [slotId]: { ...prev[slotId], tags: prev[slotId].tags.filter(t => t.id !== tagId) } }));
+                if (selectedTagIds.has(tagId)) setSelectedTagIds(prev => { const next = new Set(prev); next.delete(tagId); return next; });
+            };
+
+            const deleteSelectedTags = () => {
+                if (selectedTagIds.size === 0) return;
+                setSlots(prev => {
+                    const next = { ...prev };
+                    Object.keys(next).forEach(key => { if (next[key].tags) next[key].tags = next[key].tags.filter(t => !selectedTagIds.has(t.id)); });
+                    return next;
+                });
+                setSelectedTagIds(new Set());
+                showToast("已删除选中标签", "success");
+            };
+
+            const updateTagText = (slotId, tagId, newText) => {
+                setSlots(prev => ({ ...prev, [slotId]: { ...prev[slotId], tags: prev[slotId].tags.map(t => t.id === tagId ? { ...t, en: newText, zh: '?' } : t) } }));
+            };
+
+            const handleTagClick = (tagId, e) => {
+                e.stopPropagation();
+                if (editingTagId === tagId) return;
+                if (e.ctrlKey || e.metaKey) {
+                    setSelectedTagIds(prev => { const next = new Set(prev); next.has(tagId) ? next.delete(tagId) : next.add(tagId); return next; });
+                } else {
+                    if (selectedTagIds.has(tagId) && selectedTagIds.size === 1) setEditingTagId(tagId);
+                    else setSelectedTagIds(new Set([tagId]));
+                }
+            };
+
+            const handleTagDoubleClick = (tagId, e) => { e.stopPropagation(); setEditingTagId(tagId); setSelectedTagIds(new Set([tagId])); };
+            const handleBackgroundClick = () => { setSelectedTagIds(new Set()); setEditingTagId(null); };
+            const finishEditing = (slotId, tagId, text) => { setEditingTagId(null); if (!text?.trim()) removeTag(slotId, tagId); };
+
+            const toggleLock = (id) => setSlots(prev => ({...prev, [id]: { ...prev[id], locked: !prev[id].locked }}));
+            const toggleInclude = (id) => setSlots(prev => ({...prev, [id]: { ...prev[id], included: !prev[id].included }}));
+            const clearSlotTags = (id) => { if (slots[id]?.locked) return; setSlots(prev => ({...prev, [id]: { ...prev[id], tags: [] }})); showToast("已清空该栏", "success"); };
+
+            const copySlotContent = (slotId) => {
+                const slot = slots[slotId];
+                if (!slot?.tags.length) { showToast("该栏为空", "info"); return; }
+                navigator.clipboard.writeText(slot.tags.map(t => t.en).join(", "));
+                setSlotCopyFeedback({ id: slotId });
+                showToast("已复制该栏内容", "success");
+                setTimeout(() => setSlotCopyFeedback(null), 1500);
+            };
+
+            const copySelectedTags = () => {
+                if (selectedTagIds.size === 0) return;
+                const selectedTexts = [];
+                SLOT_CONFIG.forEach(c => {
+                    const slot = slots[c.id];
+                    if (slot?.tags) slot.tags.forEach(t => { if (selectedTagIds.has(t.id)) selectedTexts.push(t.en); });
+                });
+                navigator.clipboard.writeText(selectedTexts.join(", "));
+                showToast(`已复制 ${selectedTagIds.size} 个标签`, "success");
+            };
+
+            const copyAllPrompts = () => {
+                const text = SLOT_CONFIG
+                    .filter(c => slots[c.id]?.included)
+                    .map(c => slots[c.id]?.tags.map(t => t.en).join(", "))
+                    .filter(t => t?.trim())
+                    .join(",\n");
+                if (!text) { showToast("没有可复制的内容", "warning"); return; }
+                navigator.clipboard.writeText(text);
+                setShowCopyFeedback(true);
+                showToast("完整咒语已复制", "success");
+                setTimeout(() => setShowCopyFeedback(false), 2000);
+            };
+
+            const handleContainerClick = (slotId, e) => {
+                if (e.target.tagName === 'INPUT') return;
+                if (slotInputRefs.current[slotId]) slotInputRefs.current[slotId].focus();
+                if (!(e.ctrlKey || e.metaKey)) setSelectedTagIds(new Set());
+            };
+
+            // ================== 拖拽 ==================
+            const handleDragStart = (e, slotId, index) => { setDragData({ slotId, index }); e.dataTransfer.effectAllowed = "move"; };
+            const handleDragOverTag = (e, slotId, index) => {
+                e.preventDefault(); e.stopPropagation();
+                if (!dragData || dragData.slotId !== slotId) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const midX = rect.left + rect.width / 2;
+                const targetIndex = e.clientX > midX ? index + 1 : index;
+                setDropTarget(prev => (prev?.slotId === slotId && prev?.index === targetIndex) ? prev : { slotId, index: targetIndex });
+            };
+            const handleDragOverContainer = (e) => { e.preventDefault(); };
+            const handleDrop = (e) => {
+                e.preventDefault(); e.stopPropagation();
+                if (!dragData || !dropTarget || dragData.slotId !== dropTarget.slotId) { setDragData(null); setDropTarget(null); return; }
+                const { slotId } = dragData;
+                const oldIndex = dragData.index;
+                const newIndex = dropTarget.index;
+                setDragData(null); setDropTarget(null);
+                if (oldIndex === newIndex || oldIndex === newIndex - 1) return;
+                setSlots(prev => {
+                    const slot = prev[slotId];
+                    const newTags = [...slot.tags];
+                    const [movedItem] = newTags.splice(oldIndex, 1);
+                    const insertAt = oldIndex < newIndex ? newIndex - 1 : newIndex;
+                    newTags.splice(insertAt, 0, movedItem);
+                    return { ...prev, [slotId]: { ...slot, tags: newTags } };
+                });
+            };
+
+            const handleBottomButtonClick = () => {
+                if (!apiKeys[apiProvider]) { setIsSidebarOpen(true); setActiveSidebarTab('settings'); showToast("请配置 API Key", "warning"); return; }
+                handleOneClickRoll();
+            };
+
+            // ================== 渲染 ==================
+            return (
+                <div className="min-h-screen pb-24 relative overflow-x-hidden" onClick={handleBackgroundClick}>
+                    {/* Toast 通知 */}
+                    <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none">
+                        {toasts.map(toast => {
+                            let bgClass, IconComp;
+                            switch(toast.type) {
+                                case 'success': bgClass = "bg-emerald-600/90 border-emerald-500/50"; IconComp = CheckCircle2; break;
+                                case 'error': bgClass = "bg-red-600/90 border-red-500/50"; IconComp = XCircle; break;
+                                case 'warning': bgClass = "bg-amber-500/90 border-amber-400/50"; IconComp = AlertTriangle; break;
+                                default: bgClass = "bg-slate-700/90 border-slate-600/50"; IconComp = Info;
+                            }
+                            return (
+                                <div key={toast.id} className={`pointer-events-auto flex items-center gap-2 px-3 py-2 rounded-lg border shadow-xl backdrop-blur-md max-w-xs text-white text-sm ${bgClass}`}>
+                                    <IconComp className="w-4 h-4" /><span className="font-medium">{toast.message}</span>
+                                    <button onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))} className="ml-auto opacity-70 hover:opacity-100"><X className="w-3.5 h-3.5" /></button>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    {/* 确认弹窗 */}
+                    {confirmModal.show && (
+                        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+                            <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-5 max-w-sm w-full" onClick={e => e.stopPropagation()}>
+                                <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2"><AlertTriangle className="w-5 h-5 text-yellow-500" />{confirmModal.title}</h3>
+                                <p className="text-slate-400 mb-5 text-sm">{confirmModal.message}</p>
+                                <div className="flex justify-end gap-3">
+                                    <button onClick={() => setConfirmModal({ ...confirmModal, show: false })} className="px-4 py-2 rounded-lg text-slate-300 hover:bg-slate-800 text-sm">取消</button>
+                                    <button onClick={confirmModal.onConfirm} className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium text-sm">确认</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* OC 编辑器弹窗 */}
+                    {showOcEditor && editingOc && (
+                        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+                            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+                                <div className="flex items-center justify-between px-5 py-3 border-b border-slate-800">
+                                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                        <User className="w-5 h-5 text-pink-400" />
+                                        {currentCharacters.find(oc => oc.id === editingOc.id) ? '编辑角色' : '新建角色'}
+                                    </h3>
+                                    <button onClick={() => { setShowOcEditor(false); setEditingOc(null); }} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white">
+                                        <X className="w-5 h-5" />
+                                    </button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto custom-scrollbar p-5 space-y-5">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300 mb-2">名称</label>
+                                        <input type="text" value={editingOc.name} onChange={(e) => setEditingOc(prev => ({ ...prev, name: e.target.value }))}
+                                            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:border-pink-500" placeholder="角色名称" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
+                                            <User className="w-4 h-4 text-blue-400" /> OC 本体 <span className="text-xs text-slate-500">(角色 + 外貌)</span>
+                                        </label>
+                                        <textarea value={editingOc.core} onChange={(e) => setEditingOc(prev => ({ ...prev, core: e.target.value }))}
+                                            className="w-full h-28 bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-slate-200 text-sm font-mono focus:border-blue-500 resize-none"
+                                            placeholder="1girl, character_name, long white hair, blue eyes..." />
+                                    </div>
+                                    <div>
+                                        <div className="flex items-center justify-between mb-3">
+                                            <label className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                                                <Shirt className="w-4 h-4 text-purple-400" /> 服装方案
+                                            </label>
+                                            <button onClick={addOutfit} className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs">
+                                                <Plus className="w-3.5 h-3.5" /> 添加服装
+                                            </button>
+                                        </div>
+                                        <div className="space-y-3">
+                                            {editingOc.outfits?.length === 0 && (
+                                                <div className="text-center py-6 text-slate-600 border-2 border-dashed border-slate-800 rounded-xl">
+                                                    <Shirt className="w-8 h-8 mx-auto mb-2 opacity-50" /><p className="text-sm">暂无服装方案</p>
+                                                </div>
+                                            )}
+                                            {editingOc.outfits?.map((outfit) => (
+                                                <div key={outfit.id} className="bg-slate-800/50 border border-slate-700 rounded-xl p-3">
+                                                    <div className="flex items-center gap-3 mb-2">
+                                                        <button onClick={() => updateOutfit(outfit.id, 'enabled', !outfit.enabled)}
+                                                            className={`p-1 rounded ${outfit.enabled ? 'text-emerald-400' : 'text-slate-600'}`}>
+                                                            {outfit.enabled ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5" />}
+                                                        </button>
+                                                        <input type="text" value={outfit.name} onChange={(e) => updateOutfit(outfit.id, 'name', e.target.value)}
+                                                            className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm focus:border-purple-500" placeholder="服装名称" />
+                                                        <button onClick={() => deleteOutfit(outfit.id)} className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-slate-900 rounded-lg">
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </button>
+                                                    </div>
+                                                    <textarea value={outfit.tags} onChange={(e) => updateOutfit(outfit.id, 'tags', e.target.value)}
+                                                        className="w-full h-16 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-300 text-xs font-mono focus:border-purple-500 resize-none"
+                                                        placeholder="school uniform, white stockings..." />
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="flex items-center justify-end gap-3 px-5 py-3 border-t border-slate-800 bg-slate-900/50">
+                                    <button onClick={() => { setShowOcEditor(false); setEditingOc(null); }} className="px-4 py-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg text-sm">取消</button>
+                                    <button onClick={saveOc} className="px-5 py-2 bg-pink-600 hover:bg-pink-500 text-white font-medium rounded-lg text-sm flex items-center gap-2">
+                                        <Save className="w-4 h-4" /> 保存角色
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 全屏卡槽编辑器 */}
+                    {expandedSlotId && slots[expandedSlotId] && (
+                        <div className="fixed inset-0 z-[100] bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+                            <div className="w-full max-w-5xl h-[85vh] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+                                <div className="flex items-center justify-between px-5 py-3 bg-slate-900 border-b border-slate-800">
+                                    <div className="flex items-center gap-3">
+                                        <div className="bg-indigo-600/20 p-2 rounded-lg border border-indigo-500/30">
+                                            {(() => { const Config = SLOT_CONFIG.find(c => c.id === expandedSlotId); const Icon = Config?.icon || Sparkles; return <Icon className="w-5 h-5 text-indigo-400" />; })()}
+                                        </div>
+                                        <div>
+                                            <h2 className="text-lg font-bold text-white">{SLOT_CONFIG.find(c => c.id === expandedSlotId)?.label || "编辑"}</h2>
+                                            <p className="text-xs text-slate-500">聚焦模式</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => copySlotContent(expandedSlotId)} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white"><Copy className="w-5 h-5" /></button>
+                                        <button onClick={() => setExpandedSlotId(null)} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+                                    </div>
+                                </div>
+                                <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+                                    <div className="flex-1 flex flex-col border-r border-slate-800 min-w-0">
+                                        <div className="p-2 bg-slate-900/50 border-b border-slate-800 text-xs font-bold text-slate-500 uppercase flex justify-between">
+                                            <span>Tags</span><span className="bg-slate-800 px-1.5 rounded">{slots[expandedSlotId].tags.length}</span>
+                                        </div>
+                                        <div className="flex-1 overflow-y-auto custom-scrollbar p-3 bg-slate-900/30" onClick={(e) => handleContainerClick(expandedSlotId, e)}>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {slots[expandedSlotId].tags.map((tag, index) => {
+                                                    const isSelected = selectedTagIds.has(tag.id);
+                                                    return (
+                                                        <React.Fragment key={tag.id}>
+                                                            {dropTarget?.slotId === expandedSlotId && dropTarget?.index === index && <div className="w-1 h-7 bg-pink-500 rounded-full animate-pulse" />}
+                                                            <div 
+                                                                draggable 
+                                                                onDragStart={(e) => handleDragStart(e, expandedSlotId, index)} 
+                                                                onDragOver={(e) => handleDragOverTag(e, expandedSlotId, index)} 
+                                                                onDrop={handleDrop}
+                                                                onClick={(e) => handleTagClick(tag.id, e)} 
+                                                                onDoubleClick={(e) => handleTagDoubleClick(tag.id, e)}
+                                                                onMouseEnter={() => setHoveredTagId(tag.id)} 
+                                                                onMouseLeave={() => setHoveredTagId(null)}
+                                                                className={`group/tag flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-mono border transition-all cursor-pointer select-none
+                                                                    ${editingTagId === tag.id ? "bg-slate-950 border-violet-500 ring-2 ring-violet-500/50" 
+                                                                    : isSelected ? "bg-indigo-600 border-indigo-400 text-white shadow-lg scale-105" 
+                                                                    : hoveredTagId === tag.id ? "bg-yellow-500/20 border-yellow-500/50 text-yellow-100" 
+                                                                    : "bg-slate-800/50 border-slate-700 text-slate-300 hover:border-slate-600"}`}
+                                                            >
+                                                                <GripVertical className={`w-3 h-3 opacity-30 group-hover/tag:opacity-100 cursor-grab ${isSelected ? 'text-indigo-300' : 'text-slate-500'}`} />
+                                                                {editingTagId === tag.id ? (
+                                                                    <input 
+                                                                        ref={editInputRef} 
+                                                                        autoFocus 
+                                                                        type="text" 
+                                                                        value={tag.en} 
+                                                                        onChange={(e) => updateTagText(expandedSlotId, tag.id, e.target.value)}
+                                                                        onBlur={(e) => finishEditing(expandedSlotId, tag.id, e.target.value)} 
+                                                                        onKeyDown={(e) => { if (e.key === 'Enter') finishEditing(expandedSlotId, tag.id, e.currentTarget.value); }}
+                                                                        className="bg-transparent text-white border-none p-0 min-w-[60px] outline-none" 
+                                                                    />
+                                                                ) : <span>{tag.en}</span>}
+                                                                <button onClick={(e) => { e.stopPropagation(); removeTag(expandedSlotId, tag.id); }} 
+                                                                    className={`ml-1 opacity-0 group-hover/tag:opacity-100 hover:text-red-400 ${isSelected ? "text-indigo-200" : "text-slate-500"}`}>
+                                                                    <X className="w-3 h-3" />
+                                                                </button>
+                                                            </div>
+                                                        </React.Fragment>
+                                                    );
+                                                })}
+                                                {dropTarget?.slotId === expandedSlotId && dropTarget?.index === slots[expandedSlotId].tags.length && <div className="w-1 h-7 bg-pink-500 rounded-full animate-pulse" />}
+                                                <div className="relative flex items-center min-w-[80px] max-w-[150px]">
+                                                    <Plus className="w-3.5 h-3.5 text-slate-600 absolute left-2 pointer-events-none" />
+                                                    <input 
+                                                        ref={el => slotInputRefs.current[expandedSlotId] = el}
+                                                        type="text" 
+                                                        placeholder="Add..." 
+                                                        className="w-full bg-slate-800/30 border border-transparent hover:border-slate-700 focus:border-indigo-500 focus:bg-slate-900 rounded-lg py-1.5 pl-7 text-xs text-slate-200 placeholder:text-slate-600"
+                                                        onKeyDown={(e) => { if (e.key === 'Enter') { addTag(expandedSlotId, e.target.value); e.target.value = ''; } }} 
+                                                        onBlur={(e) => { if (e.target.value) { addTag(expandedSlotId, e.target.value); e.target.value = ''; } }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex-1 flex flex-col min-w-0 bg-slate-950/30">
+                                        <div className="p-2 bg-slate-900/50 border-b border-slate-800 text-xs font-bold text-slate-500 uppercase">翻译 & 权重</div>
+                                        <div className="flex-1 overflow-y-auto custom-scrollbar p-3">
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                                {slots[expandedSlotId].tags.map((tag) => {
+                                                    const isSelected = selectedTagIds.has(tag.id);
+                                                    return (
+                                                        <div 
+                                                            key={tag.id + '_zh_exp'} 
+                                                            onClick={(e) => handleTagClick(tag.id, e)}
+                                                            onMouseEnter={() => setHoveredTagId(tag.id)} 
+                                                            onMouseLeave={() => setHoveredTagId(null)}
+                                                            className={`group flex items-center gap-2 p-2 rounded-lg border transition-all cursor-pointer
+                                                                ${isSelected ? "bg-indigo-900/30 border-indigo-500/50" 
+                                                                : hoveredTagId === tag.id ? "bg-yellow-500/20 border-yellow-500/50" 
+                                                                : "bg-slate-900/50 border-slate-800 hover:border-slate-700"}`}
+                                                        >
+                                                            <div className="flex-1 flex flex-col min-w-0">
+                                                                <span className={`text-[10px] font-mono truncate ${hoveredTagId === tag.id ? "text-yellow-200/70" : "text-slate-500"}`}>{tag.en}</span>
+                                                                <span className={`text-xs font-medium truncate ${tag.zh === '?' ? "text-slate-600" : hoveredTagId === tag.id ? "text-yellow-100" : "text-slate-300"}`}>
+                                                                    {tag.zh === '?' ? "未翻译" : tag.zh}
+                                                                </span>
+                                                            </div>
+                                                            <button onClick={(e) => { e.stopPropagation(); removeTag(expandedSlotId, tag.id); }} 
+                                                                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-slate-800 hover:text-red-400 rounded text-slate-500 flex-shrink-0">
+                                                                <X className="w-3.5 h-3.5" />
+                                                            </button>
+                                                            <div className="flex items-center gap-0.5 bg-slate-950 rounded border border-slate-800 p-0.5 flex-shrink-0">
+                                                                <button onClick={(e) => { e.stopPropagation(); adjustTagWeight(expandedSlotId, tag.id, -0.1); }} className="p-1 hover:bg-slate-800 hover:text-red-400 rounded text-slate-500"><Minus className="w-3 h-3" /></button>
+                                                                <div className="w-px h-3 bg-slate-800"></div>
+                                                                <button onClick={(e) => { e.stopPropagation(); adjustTagWeight(expandedSlotId, tag.id, 0.1); }} className="p-1 hover:bg-slate-800 hover:text-emerald-400 rounded text-slate-500"><Plus className="w-3 h-3" /></button>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 移动端遮罩 - OC 面板 */}
+                    {ocPanelOpen && isMobile && <div className="fixed inset-0 bg-black/60 z-30 backdrop-blur-sm" onClick={() => setOcPanelOpen(false)} />}
+
+                    {/* 左侧 OC 面板 */}
+                    <div className={`fixed top-0 left-0 h-full z-40 transition-all duration-300 ${ocPanelOpen ? 'w-72 translate-x-0' : isMobile ? 'w-72 -translate-x-full' : 'w-12 translate-x-0'}`} onClick={e => e.stopPropagation()}>
+                        {!ocPanelOpen && !isMobile && (
+                            <div className="h-full bg-slate-900/95 border-r border-slate-800 flex flex-col items-center py-4">
+                                <button onClick={() => setOcPanelOpen(true)} className={`p-2.5 rounded-xl transition-all ${ocEnabled ? 'bg-pink-500/20 text-pink-400 border border-pink-500/30' : 'bg-slate-800 text-slate-500 hover:text-slate-300'}`} title="原创角色 (OC)">
+                                    <User className="w-5 h-5" />
+                                </button>
+                                {ocEnabled && currentCharacters.filter(oc => oc.enabled).length > 0 && (
+                                    <div className="mt-2 w-5 h-5 bg-pink-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                                        {currentCharacters.filter(oc => oc.enabled).length}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {ocPanelOpen && (
+                            <div className="h-full bg-slate-900 border-r border-slate-800 flex flex-col">
+                                <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-800">
+                                    <div className="flex items-center gap-2">
+                                        <User className="w-4 h-4 text-pink-400" />
+                                        <span className="font-bold text-white text-sm">原创角色</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <button onClick={(e) => { e.stopPropagation(); setOcEnabled(!ocEnabled); }} className={`relative w-10 h-5 rounded-full transition-colors ${ocEnabled ? 'bg-pink-500' : 'bg-slate-700'}`}>
+                                            <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-all ${ocEnabled ? 'left-5' : 'left-0.5'}`} />
+                                        </button>
+                                        <button onClick={(e) => { e.stopPropagation(); setOcPanelOpen(false); }} className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white">
+                                            <ChevronLeft className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="px-2 py-2 border-b border-slate-800 bg-slate-950/50">
+                                    <div className="flex items-center gap-1.5">
+                                        <div className="relative flex-1">
+                                            <button onClick={() => setShowCollectionDropdown(!showCollectionDropdown)} className="w-full flex items-center justify-between gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs text-white">
+                                                <div className="flex items-center gap-1.5 truncate"><Folder className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" /><span className="truncate">{currentCollection?.name || '选择文件集'}</span></div>
+                                                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${showCollectionDropdown ? 'rotate-180' : ''}`} />
+                                            </button>
+                                            {showCollectionDropdown && (
+                                                <div className="absolute top-full left-0 right-0 mt-1 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto custom-scrollbar">
+                                                    {ocCollections.map(col => (
+                                                        <div key={col.id} className={`flex items-center gap-2 px-2.5 py-1.5 hover:bg-slate-700 cursor-pointer text-xs ${col.id === currentCollectionId ? 'bg-slate-700' : ''}`}>
+                                                            {editingCollectionName === col.id ? (
+                                                                <input type="text" defaultValue={col.name} autoFocus className="flex-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs text-white"
+                                                                    onBlur={(e) => renameCollection(col.id, e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') renameCollection(col.id, e.target.value); if (e.key === 'Escape') setEditingCollectionName(null); }}
+                                                                    onClick={(e) => e.stopPropagation()} />
+                                                            ) : (
+                                                                <>
+                                                                    <div className="flex-1 flex items-center gap-1.5" onClick={() => { setCurrentCollectionId(col.id); setShowCollectionDropdown(false); }}>
+                                                                        <Folder className={`w-3.5 h-3.5 ${col.id === currentCollectionId ? 'text-amber-400' : 'text-slate-500'}`} />
+                                                                        <span className="text-white truncate">{col.name}</span><span className="text-slate-500">({col.characters.length})</span>
+                                                                    </div>
+                                                                    <button onClick={(e) => { e.stopPropagation(); setEditingCollectionName(col.id); }} className="p-1 text-slate-500 hover:text-blue-400 rounded"><Edit3 className="w-3 h-3" /></button>
+                                                                    {ocCollections.length > 1 && <button onClick={(e) => { e.stopPropagation(); deleteCollection(col.id); setShowCollectionDropdown(false); }} className="p-1 text-slate-500 hover:text-red-400 rounded"><Trash2 className="w-3 h-3" /></button>}
+                                                                </>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                    <div className="border-t border-slate-700 p-2">
+                                                        <div className="flex items-center gap-1.5">
+                                                            <input type="text" value={newCollectionName} onChange={(e) => setNewCollectionName(e.target.value)} placeholder="新文件集..."
+                                                                className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-2 py-1 text-xs text-white placeholder:text-slate-500"
+                                                                onKeyDown={(e) => { if (e.key === 'Enter' && newCollectionName.trim()) { createNewCollection(); setShowCollectionDropdown(false); } }} />
+                                                            <button onClick={() => { if (newCollectionName.trim()) { createNewCollection(); setShowCollectionDropdown(false); } }} className="p-1.5 bg-pink-600 hover:bg-pink-500 text-white rounded-lg"><Plus className="w-3.5 h-3.5" /></button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 mt-1.5">
+                                        <button onClick={() => ocFileInputRef.current?.click()} className="flex-1 flex items-center justify-center gap-1 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[10px]"><Download className="w-3 h-3" /> 导入</button>
+                                        <button onClick={exportCurrentCollection} className="flex-1 flex items-center justify-center gap-1 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[10px]"><Upload className="w-3 h-3" /> 导出</button>
+                                        <input type="file" ref={ocFileInputRef} onChange={handleImportCollection} accept=".json" className="hidden" />
+                                    </div>
+                                </div>
+                                <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-2">
+                                    {currentCharacters.length === 0 ? (
+                                        <div className="flex flex-col items-center justify-center py-10 text-slate-600">
+                                            <User className="w-10 h-10 mb-2 opacity-30" /><p className="text-xs mb-1">暂无角色</p><p className="text-[10px] text-slate-700">点击下方按钮创建</p>
+                                        </div>
+                                    ) : currentCharacters.map(oc => (
+                                        <div 
+                                            key={oc.id} 
+                                            className={`rounded-xl border transition-all ${oc.enabled && ocEnabled ? 'bg-pink-500/10 border-pink-500/30' : 'bg-slate-800/50 border-slate-700/50'}`}
+                                            onMouseEnter={() => setHoveredOcId(oc.id)}
+                                            onMouseLeave={() => setHoveredOcId(null)}
+                                        >
+                                            <div className="flex items-center gap-2 p-2">
+                                                <button onClick={(e) => { e.stopPropagation(); toggleOcEnabled(oc.id); }} className={`p-0.5 rounded ${oc.enabled ? 'text-pink-400' : 'text-slate-600'}`}>
+                                                    {oc.enabled ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                                                </button>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="font-medium text-white text-sm truncate">{oc.name}</div>
+                                                    <div className="text-[10px] text-slate-500 truncate">
+                                                        {oc.core?.slice(0, 25)}{oc.core?.length > 25 ? '...' : ''}
+                                                        {oc.outfits && oc.outfits.length > 0 && (
+                                                            <span className="ml-1 text-purple-400">• {oc.outfits.filter(o => o.enabled).length}/{oc.outfits.length} 服装</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-0.5">
+                                                    <button onClick={(e) => { e.stopPropagation(); editOc(oc); }} className="p-1 text-slate-500 hover:text-blue-400 hover:bg-slate-800 rounded-lg"><Edit3 className="w-3.5 h-3.5" /></button>
+                                                    <button onClick={(e) => { e.stopPropagation(); deleteOc(oc.id); }} className="p-1 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded-lg"><Trash2 className="w-3.5 h-3.5" /></button>
+                                                </div>
+                                            </div>
+                                            {oc.outfits && oc.outfits.length > 0 && hoveredOcId === oc.id && (
+                                                <div className="px-2 pb-2 pt-0">
+                                                    <div className="text-[10px] text-slate-500 mb-1 flex items-center gap-1"><Shirt className="w-3 h-3" /> 服装</div>
+                                                    <div className="space-y-1">
+                                                        {oc.outfits.map(outfit => (
+                                                            <div key={outfit.id} onClick={(e) => { e.stopPropagation(); toggleOutfitInList(oc.id, outfit.id); }}
+                                                                className={`flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer text-xs ${outfit.enabled ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-slate-800/50 text-slate-500 hover:bg-slate-800 border border-transparent'}`}>
+                                                                {outfit.enabled ? <CheckSquare className="w-3 h-3" /> : <Square className="w-3 h-3" />}<span className="truncate">{outfit.name}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="p-2 border-t border-slate-800">
+                                    <button onClick={createNewOc} className="w-full flex items-center justify-center gap-1.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium"><Plus className="w-3.5 h-3.5" /> 添加角色</button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+
+                    {/* 移动端遮罩 - 右侧边栏 */}
+                    {isSidebarOpen && isMobile && <div className="fixed inset-0 bg-black/60 z-40 backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)} />}
+
+                    {/* 右侧侧边栏 */}
+                    <div className={`fixed top-0 right-0 h-full bg-slate-900 border-l border-slate-800 z-50 transform transition-transform duration-300 shadow-2xl flex flex-col w-full sm:w-[420px] ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full'}`} onClick={e => e.stopPropagation()}>
+                        <div className="flex border-b border-slate-800 bg-slate-950">
+                            {[
+                                { id: 'generate', label: '生成', icon: Sparkles },
+                                { id: 'tools', label: '工具', icon: Wrench },
+                                { id: 'export', label: '备份', icon: Database },
+                                { id: 'history', label: '历史', icon: History },
+                                { id: 'settings', label: '设置', icon: Plug }
+                            ].map(tab => (
+                                <button key={tab.id} onClick={() => setActiveSidebarTab(tab.id)} 
+                                    className={`flex-1 py-2 flex justify-center items-center text-xs font-medium transition-colors ${activeSidebarTab === tab.id ? 'text-pink-500 border-b-2 border-pink-500 bg-slate-900' : 'text-slate-500 hover:text-slate-300'}`} title={tab.label}>
+                                    <tab.icon className="w-4 h-4" />
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-900 p-3">
+                            {/* 生成 Tab */}
+                            {activeSidebarTab === 'generate' && (
+                                <div className="space-y-3">
+                                    <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700/50">
+                                        <h3 className="text-xs font-bold text-slate-300 mb-2 flex items-center gap-2"><Sparkles className="w-3.5 h-3.5" /> AI 抽卡配置</h3>
+                                        <div className="mb-2 p-1.5 bg-slate-900/50 rounded-lg border border-indigo-500/20 text-[10px] flex items-center justify-between">
+                                            <span className="text-indigo-300 flex items-center gap-1"><Server className="w-3 h-3" /> {API_PROVIDERS[apiProvider]?.name}</span>
+                                            <span className="text-slate-500 truncate ml-2">{currentModel}</span>
+                                        </div>
+                                        {ocEnabled && currentCharacters.filter(oc => oc.enabled).length > 0 && (
+                                            <div className="mb-2 p-1.5 bg-pink-500/10 rounded-lg border border-pink-500/20 text-[10px] flex items-center gap-1.5">
+                                                <User className="w-3 h-3 text-pink-400" />
+                                                <span className="text-pink-300 truncate">OC: {currentCharacters.filter(oc => oc.enabled).map(oc => oc.name).join(', ')}</span>
+                                            </div>
+                                        )}
+                                        <div className="mb-2">
+                                            <label className="block text-[10px] text-slate-400 mb-1">主题 (可选)</label>
+                                            <input type="text" value={themeInput} onChange={(e) => setThemeInput(e.target.value)} placeholder="例: 赛博朋克, 森林精灵" 
+                                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:border-pink-500" />
+                                        </div>
+                                        <div className="mb-2">
+                                            <label className="block text-[10px] text-slate-400 mb-1">风格</label>
+                                            <div className="grid grid-cols-2 gap-1.5">
+                                                <button onClick={() => setGenerationMode('simple')} className={`py-1.5 rounded-lg text-[10px] font-medium ${generationMode === 'simple' ? 'bg-slate-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}><Zap className="w-3 h-3 inline mr-1" /> 精略</button>
+                                                <button onClick={() => setGenerationMode('detailed')} className={`py-1.5 rounded-lg text-[10px] font-medium ${generationMode === 'detailed' ? 'bg-gradient-to-r from-violet-600 to-pink-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}><Sparkles className="w-3 h-3 inline mr-1" /> 详细</button>
+                                            </div>
+                                        </div>
+                                        <div className="mb-2">
+                                            <label className="block text-[10px] text-slate-400 mb-1">记忆</label>
+                                            <div className="flex items-center gap-1.5">
+                                                <button onClick={() => setKeepMemory(false)} className={`flex-1 py-1.5 rounded-lg text-[10px] font-medium ${!keepMemory ? 'bg-slate-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>不保留</button>
+                                                <button onClick={() => setKeepMemory(true)} className={`flex-1 py-1.5 rounded-lg text-[10px] font-medium ${keepMemory ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>保留</button>
+                                                {keepMemory && conversationHistory.length > 0 && (
+                                                    <button onClick={clearMemory} className="p-1.5 bg-slate-800 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg" title="清空记忆"><Trash2 className="w-3 h-3" /></button>
+                                                )}
+                                            </div>
+                                            {keepMemory && <p className="text-[9px] text-blue-400/70 mt-1">已记录 {Math.floor(conversationHistory.length / 2)} 轮对话</p>}
+                                        </div>
+                                        <div className="mb-2">
+                                            <button onClick={() => setShowPromptSettings(!showPromptSettings)} className="w-full flex items-center justify-between text-[10px] text-slate-400 hover:text-slate-200 bg-slate-800/50 hover:bg-slate-800 rounded-lg px-2.5 py-1.5">
+                                                <div className="flex items-center gap-1.5"><PenLine className="w-3 h-3" /><span>高级：提示词模板</span></div>
+                                                <ChevronRight className={`w-3 h-3 transition-transform ${showPromptSettings ? 'rotate-90' : ''}`} />
+                                            </button>
+                                            {showPromptSettings && (
+                                            <div className="mt-2 space-y-2 bg-slate-950/50 rounded-lg p-2 border border-slate-800">
+                                                {/* 预设选择 */}
+                                                <div className="border-b border-slate-800 pb-2">
+                                                    <div className="flex items-center gap-1">
+                                                        <div className="relative flex-1">
+                                                            <select value={currentPresetId || ''} onChange={(e) => e.target.value && loadPreset(e.target.value)}
+                                                                className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-[10px] text-white appearance-none cursor-pointer">
+                                                                <option value="">选择预设...</option>
+                                                                {promptPresets.map(preset => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                                                            </select>
+                                                            <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500 pointer-events-none" />
+                                                        </div>
+                                                        {currentPresetId && <button onClick={updateCurrentPreset} className="p-1 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded" title="保存"><Save className="w-3 h-3" /></button>}
+                                                        <button onClick={() => setShowPresetNameInput(!showPresetNameInput)} className="p-1 bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 rounded" title="新建"><Plus className="w-3 h-3" /></button>
+                                                        {currentPresetId && <button onClick={() => deletePreset(currentPresetId)} className="p-1 bg-red-500/10 text-red-400 hover:bg-red-500/20 rounded" title="删除"><Trash2 className="w-3 h-3" /></button>}
+                                                    </div>
+                                                    {showPresetNameInput && (
+                                                        <div className="flex items-center gap-1 mt-1.5">
+                                                            <input type="text" value={newPresetName} onChange={(e) => setNewPresetName(e.target.value)} placeholder="预设名称..."
+                                                                className="flex-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-[10px] text-white placeholder:text-slate-500"
+                                                                onKeyDown={(e) => { if (e.key === 'Enter') saveAsNewPreset(); if (e.key === 'Escape') setShowPresetNameInput(false); }} autoFocus />
+                                                            <button onClick={saveAsNewPreset} className="px-1.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-[10px]">存</button>
+                                                            <button onClick={() => { setShowPresetNameInput(false); setNewPresetName(''); }} className="p-1 text-slate-500 hover:text-white"><X className="w-3 h-3" /></button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                
+                                                {/* 标题栏 - 只在没有编辑时显示 */}
+                                                {!editingPromptPart && (
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-[10px] text-slate-400">点击输入框可展开编辑</span>
+                                                        <button onClick={resetAllPromptParts} className="text-[10px] text-slate-500 hover:text-amber-400 flex items-center gap-0.5">
+                                                            <RotateCcw className="w-2.5 h-2.5" /> 重置
+                                                        </button>
+                                                    </div>
+                                                )}
+                                                
+                                                {/* 🔓 破限顶部 */}
+                                                {(!editingPromptPart || editingPromptPart === 'top') && (
+                                                    <div className="transition-all duration-200">
+                                                        <div className="flex items-center justify-between mb-0.5">
+                                                            <label className="text-[10px] font-medium text-slate-300">🔓 破限顶部</label>
+                                                            <div className="flex items-center gap-1">
+                                                                {editingPromptPart === 'top' && (
+                                                                    <button onClick={() => setEditingPromptPart(null)} className="text-[10px] text-blue-400 hover:text-blue-300 px-1.5 py-0.5 bg-blue-500/10 rounded">
+                                                                        收起
+                                                                    </button>
+                                                                )}
+                                                                <button onClick={() => resetPromptPart('top')} className="text-slate-600 hover:text-amber-400">
+                                                                    <RotateCcw className="w-2.5 h-2.5" />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                        <textarea 
+                                                            value={promptParts.top} 
+                                                            onChange={(e) => updatePromptPart('top', e.target.value)} 
+                                                            onFocus={() => setEditingPromptPart('top')}
+                                                            className={`w-full bg-slate-900 border border-red-500/30 rounded p-1.5 text-[10px] text-slate-300 resize-none font-mono transition-all duration-200 ${editingPromptPart === 'top' ? 'h-48' : 'h-12'}`} 
+                                                            placeholder="可选" 
+                                                        />
+                                                    </div>
+                                                )}
+                                                
+                                                {/* 📋 主提示词 */}
+                                                {(!editingPromptPart || editingPromptPart === 'main') && (
+                                                    <div className="transition-all duration-200">
+                                                        <div className="flex items-center justify-between mb-0.5">
+                                                            <label className="text-[10px] font-medium text-slate-300">📋 主提示词</label>
+                                                            <div className="flex items-center gap-1">
+                                                                {editingPromptPart === 'main' && (
+                                                                    <button onClick={() => setEditingPromptPart(null)} className="text-[10px] text-blue-400 hover:text-blue-300 px-1.5 py-0.5 bg-blue-500/10 rounded">
+                                                                        收起
+                                                                    </button>
+                                                                )}
+                                                                <button onClick={() => resetPromptPart('main')} className="text-slate-600 hover:text-amber-400">
+                                                                    <RotateCcw className="w-2.5 h-2.5" />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                        <textarea 
+                                                            value={promptParts.main} 
+                                                            onChange={(e) => updatePromptPart('main', e.target.value)} 
+                                                            onFocus={() => setEditingPromptPart('main')}
+                                                            className={`w-full bg-slate-900 border border-blue-500/30 rounded p-1.5 text-[10px] text-slate-300 resize-none font-mono transition-all duration-200 ${editingPromptPart === 'main' ? 'h-48' : 'h-16'}`} 
+                                                            placeholder="角色定义、格式要求..." 
+                                                        />
+                                                    </div>
+                                                )}
+                                                
+                                                {/* ✨ 额外要求 */}
+                                                {(!editingPromptPart || editingPromptPart === 'extra') && (
+                                                    <div className="transition-all duration-200">
+                                                        <div className="flex items-center justify-between mb-0.5">
+                                                            <label className="text-[10px] font-medium text-slate-300">✨ 额外要求</label>
+                                                            <div className="flex items-center gap-1">
+                                                                {editingPromptPart === 'extra' && (
+                                                                    <button onClick={() => setEditingPromptPart(null)} className="text-[10px] text-blue-400 hover:text-blue-300 px-1.5 py-0.5 bg-blue-500/10 rounded">
+                                                                        收起
+                                                                    </button>
+                                                                )}
+                                                                <button onClick={() => resetPromptPart('extra')} className="text-slate-600 hover:text-amber-400">
+                                                                    <RotateCcw className="w-2.5 h-2.5" />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                        <textarea 
+                                                            value={promptParts.extra} 
+                                                            onChange={(e) => updatePromptPart('extra', e.target.value)} 
+                                                            onFocus={() => setEditingPromptPart('extra')}
+                                                            className={`w-full bg-slate-900 border border-amber-500/30 rounded p-1.5 text-[10px] text-slate-300 resize-none font-mono transition-all duration-200 ${editingPromptPart === 'extra' ? 'h-48' : 'h-12'}`} 
+                                                            placeholder="可选" 
+                                                        />
+                                                    </div>
+                                                )}
+                                                
+                                                {/* 🔓 破限底部 */}
+                                                {(!editingPromptPart || editingPromptPart === 'bottom') && (
+                                                    <div className="transition-all duration-200">
+                                                        <div className="flex items-center justify-between mb-0.5">
+                                                            <label className="text-[10px] font-medium text-slate-300">🔓 破限底部</label>
+                                                            <div className="flex items-center gap-1">
+                                                                {editingPromptPart === 'bottom' && (
+                                                                    <button onClick={() => setEditingPromptPart(null)} className="text-[10px] text-blue-400 hover:text-blue-300 px-1.5 py-0.5 bg-blue-500/10 rounded">
+                                                                        收起
+                                                                    </button>
+                                                                )}
+                                                                <button onClick={() => resetPromptPart('bottom')} className="text-slate-600 hover:text-amber-400">
+                                                                    <RotateCcw className="w-2.5 h-2.5" />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                        <textarea 
+                                                            value={promptParts.bottom} 
+                                                            onChange={(e) => updatePromptPart('bottom', e.target.value)} 
+                                                            onFocus={() => setEditingPromptPart('bottom')}
+                                                            className={`w-full bg-slate-900 border border-red-500/30 rounded p-1.5 text-[10px] text-slate-300 resize-none font-mono transition-all duration-200 ${editingPromptPart === 'bottom' ? 'h-48' : 'h-12'}`} 
+                                                            placeholder="可选" 
+                                                        />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+
+                                        </div>
+                                        <button onClick={handleGenerateText} disabled={isRolling} className="w-full py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium disabled:opacity-50 mb-2">Step 1: 生成文本</button>
+                                        <div className="relative mb-2">
+                                            <div className="absolute right-1.5 top-1.5 z-10">
+                                                <button onClick={() => setGeneratedRawText('')} className="p-1 bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-red-400 rounded border border-slate-600/50" title="清空"><Trash2 className="w-3 h-3" /></button>
+                                            </div>
+                                            <textarea value={generatedRawText} onChange={(e) => setGeneratedRawText(e.target.value)} placeholder="AI 生成的文本..." 
+                                                className="w-full h-24 bg-slate-950 border border-slate-700 rounded-lg p-2 pr-10 text-[10px] text-slate-300 resize-none font-mono" />
+                                        </div>
+                                        <button onClick={() => handleParseAndFill()} disabled={isRolling} className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium disabled:opacity-50">Step 2: 分词填入</button>
+                                    </div>
+                                    <div className="relative flex items-center py-1">
+                                        <div className="flex-grow border-t border-slate-700"></div>
+                                        <span className="flex-shrink-0 mx-3 text-slate-500 text-[10px]">或直接</span>
+                                        <div className="flex-grow border-t border-slate-700"></div>
+                                    </div>
+                                    <button onClick={handleOneClickRoll} disabled={isRolling} className="w-full group relative overflow-hidden rounded-xl p-3 shadow-lg hover:shadow-pink-500/20">
+                                        <div className="absolute inset-0 bg-gradient-to-r from-violet-600 via-pink-600 to-orange-500 opacity-90 group-hover:opacity-100"></div>
+                                        <div className="relative flex items-center justify-center gap-2 text-white font-bold text-sm">
+                                            {isRolling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-white" />}
+                                            一键 AI 抽卡
+                                        </div>
+                                    </button>
+                                </div>
+                            )}
+
+                            {/* 工具 Tab */}
+                            {activeSidebarTab === 'tools' && (
+                                <div className="space-y-3">
+                                    <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700/50">
+                                        <h3 className="text-xs font-bold text-slate-300 mb-2 flex items-center gap-2"><Lock className="w-3.5 h-3.5" /> 锁定控制</h3>
+                                        <div className="grid grid-cols-2 gap-1.5">
+                                            <button onClick={batchLockAll} className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px]"><Shield className="w-3 h-3" /> 全部锁定</button>
+                                            <button onClick={batchUnlockAll} className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px]"><ShieldOff className="w-3 h-3" /> 全部解锁</button>
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700/50">
+                                        <h3 className="text-xs font-bold text-slate-300 mb-2 flex items-center gap-2"><CheckSquare className="w-3.5 h-3.5" /> 勾选控制</h3>
+                                        <div className="grid grid-cols-2 gap-1.5">
+                                            <button onClick={batchIncludeAll} className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-slate-700 hover:bg-emerald-600 text-slate-200 text-[10px]"><CheckCircle2 className="w-3 h-3" /> 全部勾选</button>
+                                            <button onClick={batchExcludeAll} className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-slate-700 hover:bg-red-500 text-slate-200 text-[10px]"><XCircle className="w-3 h-3" /> 全部取消</button>
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700/50">
+                                        <h3 className="text-xs font-bold text-slate-300 mb-2 flex items-center gap-2"><Scale className="w-3.5 h-3.5" /> 权重与内容</h3>
+                                        <div className="space-y-1.5">
+                                            <button onClick={batchClearWeights} className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-slate-700 hover:bg-indigo-600 text-slate-200 text-[10px]"><Scale className="w-3 h-3" /> 清除所有权重</button>
+                                            <button onClick={batchClearAllContent} className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-red-500/20 bg-red-500/10 text-red-300 hover:bg-red-500/20 text-[10px]"><Eraser className="w-3 h-3" /> 清空内容 (保留锁定)</button>
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700/50">
+                                        <div className="flex justify-between items-center mb-2">
+                                            <h3 className="text-xs font-bold text-slate-300 flex items-center gap-2"><ClipboardPaste className="w-3.5 h-3.5" /> 智能解析</h3>
+                                            <button onClick={() => setSmartPasteContent("")} className="text-slate-500 hover:text-red-400 p-1 rounded"><Trash2 className="w-3 h-3" /></button>
+                                        </div>
+                                        <textarea value={smartPasteContent} onChange={(e) => setSmartPasteContent(e.target.value)} placeholder="粘贴完整咒语 (tags)..." 
+                                            className="w-full h-20 bg-slate-900 border border-slate-700 rounded-lg p-2 text-[10px] text-slate-300 resize-none mb-2" />
+                                        <button onClick={handleSmartPaste} disabled={isSmartParsing} className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-medium disabled:opacity-50">
+                                            {isSmartParsing ? <Loader2 className="w-3 h-3 animate-spin" /> : <BrainCircuit className="w-3 h-3" />}
+                                            {isSmartParsing ? "解析中..." : "智能解析填入"}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* 导入导出 Tab */}
+                            {activeSidebarTab === 'export' && (
+                                <div className="space-y-3">
+                                    <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700/50">
+                                        <h3 className="text-xs font-bold text-slate-300 mb-2 flex items-center gap-2"><FolderUp className="w-3.5 h-3.5" /> 全量备份导出</h3>
+                                        <div className="space-y-1 mb-3">
+                                            {[
+                                                { key: 'apiConfig', label: 'API 配置' },
+                                                { key: 'apiKeys', label: 'API Keys', warning: true },
+                                                { key: 'ocData', label: 'OC 文件集' },
+                                                { key: 'promptParts', label: '提示词模板' },
+                                                { key: 'promptPresets', label: '提示词预设' },
+                                                { key: 'currentSlots', label: '当前卡槽' },
+                                            ].map(item => (
+                                                <label key={item.key} className={`flex items-center gap-2 p-1.5 rounded-lg cursor-pointer text-[10px] ${exportOptions[item.key] ? 'bg-slate-700/50' : 'bg-slate-900/30 hover:bg-slate-800/50'}`}>
+                                                    <input type="checkbox" checked={exportOptions[item.key]} onChange={(e) => setExportOptions(prev => ({ ...prev, [item.key]: e.target.checked }))}
+                                                        className="rounded border-slate-600 bg-slate-800 text-pink-500 w-3 h-3" />
+                                                    <span className={item.warning ? 'text-amber-400' : 'text-slate-200'}>
+                                                        {item.warning && <AlertTriangle className="w-3 h-3 inline mr-1" />}{item.label}
+                                                    </span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                        <button onClick={exportAllConfig} className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs"><Download className="w-3.5 h-3.5" /> 导出备份</button>
+                                    </div>
+                                    <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700/50">
+                                        <h3 className="text-xs font-bold text-slate-300 mb-2 flex items-center gap-2"><FolderDown className="w-3.5 h-3.5" /> 导入备份</h3>
+                                        <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed border-slate-700 hover:border-slate-500 rounded-xl p-6 text-center cursor-pointer group">
+                                            <Upload className="w-8 h-8 mx-auto mb-2 text-slate-600 group-hover:text-slate-400" />
+                                            <p className="text-xs text-slate-400 group-hover:text-slate-300">点击选择备份文件</p>
+                                            <p className="text-[10px] text-slate-600 mt-1">将覆盖现有配置</p>
+                                        </div>
+                                        <input type="file" ref={fileInputRef} onChange={handleImportConfig} accept=".json" className="hidden" />
+                                    </div>
+                                    <div className="bg-red-500/10 rounded-xl p-3 border border-red-500/20">
+                                        <h3 className="text-xs font-bold text-red-400 mb-2 flex items-center gap-2"><AlertTriangle className="w-3.5 h-3.5" /> 危险操作</h3>
+                                        <button onClick={resetAllSettings} className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 text-xs"><Trash2 className="w-3.5 h-3.5" /> 重置所有设置</button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* 历史 Tab */}
+                            {activeSidebarTab === 'history' && (
+                                <div className="space-y-1.5">
+                                    {history.length === 0 ? (
+                                        <div className="flex flex-col items-center justify-center py-10 text-slate-600 gap-2 border-2 border-dashed border-slate-800 rounded-xl">
+                                            <History className="w-8 h-8 opacity-30" /><span className="text-xs">暂无历史记录</span>
+                                        </div>
+                                    ) : history.map((entry, index) => ({ ...entry, originalIndex: index })).filter(e => e.source === 'ai').reverse().map((entry) => {
+                                        const isActive = entry.originalIndex === historyIndex;
+                                        return (
+                                            <div key={entry.id} onClick={() => jumpToHistory(entry.originalIndex)} 
+                                                className={`p-2 rounded-lg cursor-pointer border ${isActive ? "bg-blue-500/10 border-blue-500/50" : "bg-slate-800/40 border-slate-800 hover:bg-slate-800 hover:border-slate-700"}`}>
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <span className={`text-[10px] font-mono font-medium ${isActive ? "text-blue-400" : "text-slate-500"}`}>{entry.timestamp}</span>
+                                                    {isActive && <span className="text-[9px] bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded-full border border-blue-500/30">当前</span>}
+                                                </div>
+                                                <div className="text-[10px] text-slate-400">{Object.values(entry.slots).reduce((acc, s) => acc + s.tags.length, 0)} 个提示词</div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            {/* 设置 Tab */}
+                            {activeSidebarTab === 'settings' && (
+                                <div className="space-y-3">
+                                    <div className={`rounded-xl p-3 border ${apiConnected ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-slate-800/50 border-slate-700/50'}`}>
+                                        <div className="flex items-center gap-2">
+                                            {apiConnected ? (
+                                                <>
+                                                    <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center"><PlugZap className="w-4 h-4 text-emerald-400" /></div>
+                                                    <div><div className="text-xs font-medium text-emerald-400">已连接</div><div className="text-[10px] text-emerald-400/70">{API_PROVIDERS[apiProvider]?.name}</div></div>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center"><Plug className={`w-4 h-4 ${apiKeys[apiProvider] ? 'text-amber-400' : 'text-red-400'}`} /></div>
+                                                    <div><div className={`text-xs font-medium ${apiKeys[apiProvider] ? 'text-amber-400' : 'text-red-400'}`}>{apiKeys[apiProvider] ? '未测试' : '未配置'}</div><div className="text-[10px] text-slate-500">请配置后测试</div></div>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="space-y-3">
+                                        <h3 className="text-xs font-bold text-slate-200 flex items-center gap-2 border-b border-slate-800 pb-2"><Server className="w-3.5 h-3.5" /> API 配置</h3>
+                                        <div>
+                                            <label className="block text-[10px] font-medium text-slate-400 mb-1 uppercase">服务商</label>
+                                            <select value={apiProvider} onChange={(e) => handleProviderChange(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2 px-2.5 text-xs text-slate-200">
+                                                {Object.values(API_PROVIDERS).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] font-medium text-slate-400 mb-1 uppercase">API Key</label>
+                                            <div className="relative">
+                                                <KeyRound className="absolute left-2.5 top-2 w-3.5 h-3.5 text-slate-500" />
+                                                <input type="password" value={apiKeys[apiProvider] || ''} onChange={(e) => handleApiKeyChange(e.target.value)} 
+                                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2 pl-8 pr-3 text-xs text-slate-200 placeholder:text-slate-600" placeholder="sk-..." />
+                                            </div>
+                                            <p className="text-[9px] text-slate-500 mt-1">仅保存在本地</p>
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] font-medium text-slate-400 mb-1 uppercase flex items-center gap-1"><Globe className="w-3 h-3" /> Base URL</label>
+                                            <input type="text" value={currentBaseUrl} onChange={(e) => handleBaseUrlChange(e.target.value)} 
+                                                className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2 px-2.5 text-xs text-slate-200 font-mono" placeholder="https://api..." />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] font-medium text-slate-400 mb-1 uppercase flex items-center gap-1"><Cpu className="w-3 h-3" /> Model</label>
+                                            <div className="flex gap-1.5">
+                                                <input type="text" value={currentModel} onChange={(e) => handleModelChange(e.target.value)} 
+                                                    className="flex-1 bg-slate-950 border border-slate-700 rounded-lg py-2 px-2.5 text-xs text-slate-200 font-mono" placeholder="model name" />
+                                                <button onClick={fetchModelList} disabled={isLoadingModels} className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-slate-400 hover:text-white disabled:opacity-50" title="获取模型列表">
+                                                    {isLoadingModels ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <List className="w-3.5 h-3.5" />}
+                                                </button>
+                                            </div>
+                                            {availableModels.length > 0 && (
+                                                <div className="mt-1.5 max-h-40 overflow-y-auto custom-scrollbar bg-slate-950 border border-slate-700 rounded-lg">
+                                                    {availableModels.map(m => (
+                                                        <button key={m} onClick={() => handleModelChange(m)} 
+                                                            className={`w-full text-left px-2.5 py-1 text-[10px] font-mono hover:bg-slate-800 ${currentModel === m ? 'text-pink-400 bg-pink-500/10' : 'text-slate-400'}`}>{m}</button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <button onClick={testApiConnection} disabled={isTestingConnection || !apiKeys[apiProvider]} 
+                                            className={`w-full flex items-center justify-center gap-1.5 py-2 rounded-lg font-medium text-xs disabled:opacity-50 ${apiConnected ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-slate-700 hover:bg-slate-600 text-slate-200'}`}>
+                                            {isTestingConnection ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> 测试中...</> : <><TestTube className="w-3.5 h-3.5" /> 测试连接</>}
+                                        </button>
+                                        {apiError && (
+                                            <div className="p-2 bg-red-500/10 border border-red-500/30 rounded-lg">
+                                                <div className="flex items-start gap-1.5"><XCircle className="w-3.5 h-3.5 text-red-400 mt-0.5 flex-shrink-0" /><p className="text-[10px] text-red-400 break-all">{apiError}</p></div>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="bg-gradient-to-r from-indigo-500/20 to-purple-500/20 border border-indigo-500/30 rounded-xl p-3 text-center space-y-2">
+                                        <div><div className="text-[10px] text-indigo-300 font-medium">原项目</div><div className="text-sm font-bold text-white">逐辰十七</div></div>
+                                        <div className="border-t border-indigo-500/20 pt-2"><div className="text-[10px] text-pink-300 font-medium">二改版</div><div className="text-sm font-bold text-white">渊//愿</div></div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Header */}
+                    <header className="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 sticky top-0 z-20 px-4 py-3 shadow-lg" onClick={e => e.stopPropagation()}>
+                        <div className="flex justify-between items-center">
+                            {/* 左侧标题 */}
+                            <div className="flex items-center gap-3" style={{ marginLeft: isMobile ? 0 : (ocPanelOpen ? '288px' : '48px'), transition: 'margin-left 0.3s' }}>
+                                <button onClick={() => setOcPanelOpen(!ocPanelOpen)} className={`p-2 rounded-lg md:hidden ${ocEnabled && currentCharacters.filter(oc => oc.enabled).length > 0 ? 'bg-pink-500/20 text-pink-400 border border-pink-500/30' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
+                                    <User className="w-5 h-5" />
+                                </button>
+                                <div className="bg-gradient-to-tr from-pink-500 to-violet-600 p-2 rounded-lg shadow-lg shadow-pink-500/20">
+                                    <Sparkles className="w-5 h-5 text-white animate-pulse" />
+                                </div>
+                                <h1 className="text-lg md:text-xl font-bold text-slate-200">
+                                    SD 抽卡 <span className="text-slate-500 text-sm font-normal ml-1 hidden md:inline">AI 提示词生成器</span>
+                                </h1>
+                            </div>
+                            {/* 右侧按钮 - 固定在侧边栏左边 */}
+                            <div className="fixed top-3 flex items-center gap-3 z-30" style={{ right: isMobile ? '16px' : '440px' }}>
+                                <button onClick={copyAllPrompts} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all border ${showCopyFeedback ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" : "bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border-slate-700/50"}`}>
+                                    {showCopyFeedback ? <CheckSquare className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                                    <span>{showCopyFeedback ? "已复制" : "复制咒语"}</span>
+                                </button>
+                                <button onClick={() => { setIsSidebarOpen(!isSidebarOpen); if(!isSidebarOpen) setActiveSidebarTab('generate'); }} className={`p-2 rounded-lg transition-colors border ${isSidebarOpen ? "bg-slate-700 text-white border-slate-600" : "bg-transparent text-slate-400 hover:text-white hover:bg-slate-800 border-transparent"}`}>
+                                    <Menu className="w-5 h-5" />
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Main Content */}
+                    <main className="p-4 md:p-6 transition-all" onClick={e => e.stopPropagation()}>
+                        <div className="max-w-6xl mx-auto">
+                            {!apiKeys[apiProvider] && (
+                                <div onClick={() => { setIsSidebarOpen(true); setActiveSidebarTab('settings'); }} className="mb-6 text-center cursor-pointer group">
+                                    <div className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-pink-500/10 text-pink-300 text-sm font-medium border border-pink-500/20 group-hover:bg-pink-500/20 group-hover:border-pink-500/40 transition-all shadow-[0_0_15px_rgba(236,72,153,0.1)]">
+                                        <Settings2 className="w-4 h-4 animate-bounce" /><span>请点击此处配置 API Key</span>
+                                    </div>
+                                </div>
+                            )}
+                            {apiError && (
+                                <div className="max-w-2xl mx-auto mb-6 bg-red-500/10 border border-red-500/50 text-red-200 px-4 py-3 rounded-lg text-center text-sm flex items-center justify-center gap-2">
+                                    <AlertTriangle className="w-4 h-4" />{apiError}
+                                </div>
+                            )}
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                                {SLOT_CONFIG.map((config) => {
+                                    const slot = slots[config.id];
+                                    if (!slot) return null;
+                                    const SlotIcon = config.icon;
+                                    return (
+                                        <div key={config.id} className={`group flex flex-col rounded-xl border transition-all duration-300 overflow-hidden ${slot.locked ? "bg-slate-900 border-pink-500/40 shadow-[0_0_20px_rgba(236,72,153,0.05)]" : "bg-slate-900 border-slate-800 hover:border-slate-600 hover:shadow-lg"} ${!slot.included ? "opacity-60 grayscale-[0.5]" : ""}`}>
+                                            {/* 卡槽头部 */}
+                                            <div onClick={() => setExpandedSlotId(config.id)} className="flex justify-between items-center px-4 py-3 bg-slate-900/50 border-b border-slate-800/50 cursor-pointer hover:bg-slate-800/80 transition-colors">
+                                                <div className="flex items-center gap-2 text-xs font-bold tracking-wider text-slate-400 uppercase">
+                                                    <SlotIcon className="w-3.5 h-3.5" />{config.label}
+                                                </div>
+                                                <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                                                    <button onClick={() => setExpandedSlotId(config.id)} className="p-1.5 rounded text-slate-600 hover:text-white hover:bg-slate-800" title="放大">
+                                                        <Maximize2 className="w-4 h-4" />
+                                                    </button>
+                                                    <div className="w-px h-4 bg-slate-700 mx-1"></div>
+                                                    <button onClick={() => copySlotContent(config.id)} className={`p-1.5 rounded transition-colors ${slotCopyFeedback?.id === config.id ? "text-emerald-400 bg-emerald-400/10" : "text-slate-600 hover:text-emerald-400 hover:bg-slate-800"}`}>
+                                                        {slotCopyFeedback?.id === config.id ? <CheckSquare className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                                                    </button>
+                                                    <button onClick={() => clearSlotTags(config.id)} className={`p-1.5 rounded ${slot.locked ? "text-slate-700 cursor-not-allowed" : "text-slate-600 hover:text-red-400 hover:bg-slate-800"}`} disabled={slot.locked}>
+                                                        <Trash2 className="w-4 h-4" />
+                                                    </button>
+                                                    <div className="w-px h-4 bg-slate-700 mx-1"></div>
+                                                    <button onClick={() => toggleInclude(config.id)} className={`p-1.5 rounded ${slot.included ? "text-emerald-400 hover:bg-emerald-400/10" : "text-slate-600 hover:text-slate-400"}`}>
+                                                        {slot.included ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                                                    </button>
+                                                    <button onClick={() => toggleLock(config.id)} className={`p-1.5 rounded ${slot.locked ? "text-pink-400 bg-pink-400/10" : "text-slate-600 hover:text-slate-300 hover:bg-slate-800"}`}>
+                                                        {slot.locked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            {/* 卡槽内容 */}
+                                            <div className="relative flex-grow flex flex-col h-[240px]">
+                                                {/* 英文 Tags */}
+                                                <div 
+                                                    className={`flex-1 p-3 overflow-y-auto custom-scrollbar bg-slate-900/50 cursor-text ${dragData?.slotId === config.id ? 'bg-slate-800/30' : ''}`}
+                                                    ref={el => { if(!scrollRefs.current[config.id]) scrollRefs.current[config.id] = {}; scrollRefs.current[config.id].en = el; }}
+                                                    onScroll={() => handleSyncScroll(config.id, 'en')}
+                                                    onDragOver={handleDragOverContainer}
+                                                    onDrop={handleDrop}
+                                                    onClick={(e) => handleContainerClick(config.id, e)}
+                                                >
+                                                    <div className="flex flex-wrap gap-1.5 pointer-events-none">
+                                                        {slot.tags.map((tag, index) => {
+                                                            const isSelected = selectedTagIds.has(tag.id);
+                                                            return (
+                                                                <React.Fragment key={tag.id}>
+                                                                    {dropTarget?.slotId === config.id && dropTarget?.index === index && (
+                                                                        <div className="w-1 h-6 bg-pink-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(236,72,153,0.8)]" />
+                                                                    )}
+                                                                    <div 
+                                                                        draggable 
+                                                                        onDragStart={(e) => handleDragStart(e, config.id, index)} 
+                                                                        onDragOver={(e) => handleDragOverTag(e, config.id, index)} 
+                                                                        onClick={(e) => handleTagClick(tag.id, e)} 
+                                                                        onDoubleClick={(e) => handleTagDoubleClick(tag.id, e)} 
+                                                                        onMouseEnter={() => setHoveredTagId(tag.id)} 
+                                                                        onMouseLeave={() => setHoveredTagId(null)}
+                                                                        className={`group/tag flex items-center gap-1 px-2 py-1 rounded text-xs font-mono border transition-all select-none pointer-events-auto cursor-pointer
+                                                                            ${editingTagId === tag.id ? "bg-slate-950 border-violet-500 ring-2 ring-violet-500/50 z-20" 
+                                                                            : isSelected ? "bg-indigo-600 border-indigo-400 text-white shadow-md z-10" 
+                                                                            : hoveredTagId === tag.id ? "bg-yellow-500/20 border-yellow-500/50 text-yellow-100" 
+                                                                            : "bg-slate-700 border-slate-500 text-slate-200"}
+                                                                            ${dragData?.slotId === config.id && dragData?.index === index ? 'opacity-20 scale-95' : ''}`}
+                                                                    >
+                                                                        <GripVertical className={`w-2.5 h-2.5 opacity-0 group-hover/tag:opacity-100 cursor-grab ${isSelected ? 'text-indigo-300' : 'text-slate-600'}`} />
+                                                                        {editingTagId === tag.id ? (
+                                                                            <input 
+                                                                                ref={editInputRef} 
+                                                                                type="text" 
+                                                                                value={tag.en} 
+                                                                                onChange={(e) => updateTagText(config.id, tag.id, e.target.value)} 
+                                                                                onBlur={(e) => finishEditing(config.id, tag.id, e.target.value)} 
+                                                                                onKeyDown={(e) => { if (e.key === 'Enter') finishEditing(config.id, tag.id, e.currentTarget.value); }} 
+                                                                                onClick={(e) => e.stopPropagation()} 
+                                                                                className="bg-transparent text-white border-none p-0 min-w-[50px] outline-none" 
+                                                                            />
+                                                                        ) : <span>{tag.en}</span>}
+                                                                        <button onClick={(e) => { e.stopPropagation(); removeTag(config.id, tag.id); }} className={`opacity-0 group-hover/tag:opacity-100 ml-0.5 ${isSelected ? 'text-indigo-200 hover:text-white' : 'hover:text-red-400'}`}>
+                                                                            <X className="w-3 h-3" />
+                                                                        </button>
+                                                                    </div>
+                                                                </React.Fragment>
+                                                            );
+                                                        })}
+                                                        {dropTarget?.slotId === config.id && dropTarget?.index === slot.tags.length && (
+                                                            <div className="w-1 h-6 bg-pink-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(236,72,153,0.8)]" />
+                                                        )}
+                                                        {/* 添加输入框 */}
+                                                        <div className="relative flex items-center min-w-[60px] flex-grow max-w-[120px] pointer-events-auto">
+                                                            <Plus className="w-3 h-3 text-slate-600 absolute left-1 pointer-events-none" />
+                                                            <input 
+                                                                ref={el => slotInputRefs.current[config.id] = el} 
+                                                                type="text" 
+                                                                placeholder="Add..." 
+                                                                className="w-full bg-transparent border-none text-xs text-slate-300 placeholder:text-slate-600 focus:ring-0 px-1 pl-5 py-1" 
+                                                                onKeyDown={(e) => { if (e.key === 'Enter') { addTag(config.id, e.target.value); e.target.value = ''; } }} 
+                                                                onBlur={(e) => { if (e.target.value) { addTag(config.id, e.target.value); e.target.value = ''; } }} 
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {/* 分隔线 */}
+                                                <div className="h-px bg-slate-800 w-full flex items-center justify-center">
+                                                    <div className="bg-slate-800 px-2 text-[10px] text-slate-600 uppercase font-bold tracking-wider">Translation</div>
+                                                </div>
+
+                                                {/* 中文翻译 */}
+                                                <div 
+                                                    className="h-[90px] shrink-0 p-3 bg-slate-950/30 overflow-y-auto custom-scrollbar" 
+                                                    ref={el => { if(!scrollRefs.current[config.id]) scrollRefs.current[config.id] = {}; scrollRefs.current[config.id].zh = el; }} 
+                                                    onScroll={() => handleSyncScroll(config.id, 'zh')}
+                                                >
+                                                    <div className="flex flex-wrap gap-1.5">
+                                                        {slot.tags.map((tag) => {
+                                                            const isSelected = selectedTagIds.has(tag.id);
+                                                            return (
+                                                                <div 
+                                                                    key={tag.id + '_zh'} 
+                                                                    onClick={(e) => handleTagClick(tag.id, e)} 
+                                                                    onMouseEnter={() => setHoveredTagId(tag.id)} 
+                                                                    onMouseLeave={() => setHoveredTagId(null)}
+                                                                    className={`group/zhtag flex items-center gap-1 px-2 py-0.5 rounded text-xs border transition-all select-none cursor-pointer
+                                                                        ${isSelected ? "bg-indigo-900/50 border-indigo-500/50 text-indigo-200 shadow-sm" 
+                                                                        : hoveredTagId === tag.id ? "bg-yellow-500/20 border-yellow-500/50 text-yellow-200 shadow-sm" 
+                                                                        : "bg-transparent border-transparent text-slate-500"}`}
+                                                                >
+                                                                    <button onClick={(e) => { e.stopPropagation(); removeTag(config.id, tag.id); }} className="opacity-0 group-hover/zhtag:opacity-100 -ml-1 mr-1 p-0.5 text-slate-500 hover:text-red-400 rounded">
+                                                                        <X className="w-3 h-3" />
+                                                                    </button>
+                                                                    <span>{tag.zh === '?' ? "..." : tag.zh}</span>
+                                                                    <div className="flex flex-col gap-0.5 opacity-0 group-hover/zhtag:opacity-100 ml-1 -mr-1">
+                                                                        <div onClick={(e) => { e.stopPropagation(); adjustTagWeight(config.id, tag.id, 0.1); }} className="h-2 w-2.5 bg-slate-800 border border-slate-600 hover:bg-emerald-500 hover:border-emerald-500 flex items-center justify-center rounded-[1px] cursor-pointer text-slate-400 hover:text-white">
+                                                                            <Plus className="w-1.5 h-1.5" />
+                                                                        </div>
+                                                                        <div onClick={(e) => { e.stopPropagation(); adjustTagWeight(config.id, tag.id, -0.1); }} className="h-2 w-2.5 bg-slate-800 border border-slate-600 hover:bg-red-500 hover:border-red-500 flex items-center justify-center rounded-[1px] cursor-pointer text-slate-400 hover:text-white">
+                                                                            <Minus className="w-1.5 h-1.5" />
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+
+                                                {/* 加载遮罩 */}
+                                                {isRolling && !slot.locked && (
+                                                    <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-[1px] flex items-center justify-center z-10">
+                                                        <RefreshCw className="w-6 h-6 text-pink-500 animate-spin" />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </main>
+
+                    {/* 底部按钮 */}
+                    <div className="fixed bottom-6 left-0 right-0 z-30 px-4 pointer-events-none" onClick={e => e.stopPropagation()}>
+                        <div className="max-w-md mx-auto pointer-events-auto">
+                            <button onClick={handleBottomButtonClick} disabled={isRolling} className={`w-full group relative overflow-hidden rounded-2xl p-4 transition-all duration-200 shadow-2xl ${isRolling ? "scale-95 opacity-80" : "hover:scale-[1.02] hover:shadow-pink-500/20 cursor-pointer"}`}>
+                                <div className={`absolute inset-0 animate-gradient-x ${!apiKeys[apiProvider] ? 'bg-slate-800' : 'bg-gradient-to-r from-violet-600 via-pink-600 to-orange-500'}`}></div>
+                                <div className="relative flex items-center justify-center gap-3 text-white font-bold text-lg tracking-widest uppercase">
+                                    {isRolling ? (
+                                        <>
+                                            <RefreshCw className="w-5 h-5 animate-spin" />
+                                            <span>{loadingText}</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Sparkles className="w-5 h-5 animate-pulse" />
+                                            <span>{!apiKeys[apiProvider] ? "点击设置 API Key" : "一键 AI 抽卡"}</span>
+                                        </>
+                                    )}
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<StableDiffusionGacha />);
+    </script>
+</body>
+</html>
